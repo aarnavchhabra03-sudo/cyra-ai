@@ -124,22 +124,31 @@ export async function POST(request: Request) {
     );
   }
 
-  // 4. STEP B: Explicitly map & Insert `modules` records (using real column names)
+  // 4. STEP B: Explicitly map & Insert `modules` records (using ONLY columns present in live schema)
   try {
     const modulesToInsert = pathCurriculum.modules.map((mod, index) => ({
       learning_path_id: learningPathId,
       title: mod.title,
       description: mod.description || '',
       module_order: mod.order || index + 1,
-      status: index === 0 ? 'in_progress' : 'locked',
     }));
 
-    console.log(`[save-learning-path] Inserting ${modulesToInsert.length} module records...`);
+    console.log("[CYRA DEBUG] MODULE ROWS:", modulesToInsert);
+    console.log("[CYRA DEBUG] MODULE COUNT:", modulesToInsert.length);
 
     const { data: insertedModules, error: modulesError } = await supabase
       .from('modules')
       .insert(modulesToInsert)
       .select('id, module_order, title');
+
+    if (modulesError) {
+      console.error("[CYRA DEBUG] MODULE INSERT ERROR:", {
+        code: modulesError.code,
+        message: modulesError.message,
+        details: modulesError.details,
+        hint: modulesError.hint
+      });
+    }
 
     if (modulesError || !insertedModules || insertedModules.length !== modulesToInsert.length) {
       console.error(`[save-learning-path] ERROR in modules insert: ${modulesError?.code || 'COUNT_MISMATCH'} - ${modulesError?.message || 'Failed to insert all modules'}`);
@@ -156,7 +165,7 @@ export async function POST(request: Request) {
 
     console.log(`[save-learning-path] Successfully inserted ${insertedModules.length} modules.`);
 
-    // 5. STEP C: Explicitly map & Insert `lessons` records for each module
+    // 5. STEP C: Explicitly map & Insert `lessons` records for each module (using ONLY columns present in live schema)
     const lessonsToInsert: any[] = [];
 
     pathCurriculum.modules.forEach((mod) => {
@@ -170,7 +179,6 @@ export async function POST(request: Request) {
             content: lesson.keyConcepts && lesson.keyConcepts.length > 0 ? `Key Concepts: ${lesson.keyConcepts.join(', ')}` : '',
             estimated_minutes: lesson.estimatedMinutes || 15,
             lesson_order: lesson.order || lIndex + 1,
-            status: mod.order === 1 && (lesson.order === 1 || lIndex === 0) ? 'in_progress' : 'locked',
           });
         });
       }
@@ -183,6 +191,15 @@ export async function POST(request: Request) {
         .from('lessons')
         .insert(lessonsToInsert)
         .select('id');
+
+      if (lessonsError) {
+        console.error("[CYRA DEBUG] LESSON INSERT ERROR:", {
+          code: lessonsError.code,
+          message: lessonsError.message,
+          details: lessonsError.details,
+          hint: lessonsError.hint
+        });
+      }
 
       if (lessonsError || !insertedLessons || insertedLessons.length !== lessonsToInsert.length) {
         console.error(`[save-learning-path] ERROR in lessons insert: ${lessonsError?.code || 'COUNT_MISMATCH'} - ${lessonsError?.message || 'Failed to insert all lessons'}`);
