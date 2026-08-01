@@ -24,16 +24,15 @@ const bottomNav = [
 ];
 
 export default function Sidebar() {
+  // 1. ALL HOOKS AT TOP LEVEL
   const pathname = usePathname();
   const router = useRouter();
   const [profile, setProfile] = useState<Profile | null>(null);
 
-  // If on login or signup pages, don't show sidebar
-  if (pathname === '/login' || pathname === '/signup') {
-    return null;
-  }
-
   useEffect(() => {
+    // Skip data loading on auth pages
+    if (pathname === '/login' || pathname === '/signup') return;
+
     async function loadProfile() {
       try {
         const supabase = createClient();
@@ -66,6 +65,11 @@ export default function Sidebar() {
 
     loadProfile();
   }, [pathname]);
+
+  // 2. EARLY RETURN AFTER ALL HOOKS
+  if (pathname === '/login' || pathname === '/signup') {
+    return null;
+  }
 
   const handleSignOut = async () => {
     try {
