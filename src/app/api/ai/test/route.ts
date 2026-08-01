@@ -56,7 +56,7 @@ export async function GET() {
       return NextResponse.json(
         {
           success: false,
-          error: 'Gemini API quota exceeded',
+          error: 'Gemini API quota exceeded (limit of 0 on free tier / non-billing project)',
           code: 'QUOTA_EXCEEDED',
         },
         { status: 429 }
