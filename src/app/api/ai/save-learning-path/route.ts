@@ -175,8 +175,9 @@ export async function POST(request: Request) {
           lessonsToInsert.push({
             module_id: insertedMod.id,
             title: lesson.title,
-            description: lesson.description || '',
-            content: lesson.keyConcepts && lesson.keyConcepts.length > 0 ? `Key Concepts: ${lesson.keyConcepts.join(', ')}` : '',
+            content: lesson.description
+              ? `${lesson.description}${lesson.keyConcepts && lesson.keyConcepts.length > 0 ? '\n\nKey Concepts: ' + lesson.keyConcepts.join(', ') : ''}`
+              : (lesson.keyConcepts ? `Key Concepts: ${lesson.keyConcepts.join(', ')}` : ''),
             estimated_minutes: lesson.estimatedMinutes || 15,
             lesson_order: lesson.order || lIndex + 1,
           });
