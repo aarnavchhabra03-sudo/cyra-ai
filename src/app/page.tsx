@@ -5,10 +5,12 @@ import { useRouter } from 'next/navigation';
 import {
   ArrowRight, Flame, CheckCircle2, Circle,
   Clock, Award, BookOpen, ArrowUpRight,
-  Sparkles, Zap, ChevronRight, Compass
+  Sparkles, Zap, ChevronRight, Compass,
+  ChevronDown, Calendar
 } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { Profile, LearningPath, DailyTaskRecord } from '@/types/database';
+import { DifficultyLevel } from '@/types/ai';
 import { mockDailyTasks, mockCourses } from '@/data/mockData';
 
 /* ── Generation step labels ─────────────────────── */
@@ -39,6 +41,12 @@ export default function Dashboard() {
   const [step, setStep] = useState(0);
   const [progress, setProgress] = useState(0);
   const [inputFocused, setInputFocused] = useState(false);
+
+  // Personalization States
+  const [experienceLevel, setExperienceLevel] = useState<DifficultyLevel>('beginner');
+  const [goal, setGoal] = useState<string>('General Learning');
+  const [minutesPerDay, setMinutesPerDay] = useState<number>(30);
+  const [targetDate, setTargetDate] = useState<string>('');
 
   // Supabase Data States
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -139,11 +147,9 @@ export default function Dashboard() {
 
     try {
       const supabase = createClient();
-      // Update task in DB if not mock task
       if (!taskId.startsWith('task-')) {
         await supabase.from('daily_tasks').update({ completed: nextCompleted }).eq('id', taskId);
       }
-      // Update user profile XP
       if (profile) {
         await supabase.from('profiles').update({ xp: Math.max(0, profile.xp + xpChange) }).eq('id', userId);
       }
@@ -152,41 +158,25 @@ export default function Dashboard() {
     }
   };
 
-  /* Create Learning Path & Generation Simulation */
+  /* Create Learning Path Simulation */
   const handleGenerate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!query.trim()) return;
 
+    // Collect frontend state
+    const payload = {
+      topic: query.trim(),
+      experienceLevel,
+      goal,
+      minutesPerDay,
+      targetDate: targetDate || undefined,
+    };
+
+    console.log('Collected Learning Path Input:', payload);
+
     setGenerating(true);
     setStep(0);
     setProgress(0);
-
-    const targetGoal = query.trim();
-
-    // Insert learning path into Supabase
-    let createdPathId: string | null = null;
-    if (userId) {
-      try {
-        const supabase = createClient();
-        const { data: newPath } = await supabase
-          .from('learning_paths')
-          .insert({
-            user_id: userId,
-            title: targetGoal,
-            goal: targetGoal,
-            status: 'active',
-            progress: 0,
-          })
-          .select()
-          .single();
-
-        if (newPath) {
-          createdPathId = newPath.id;
-        }
-      } catch (err) {
-        console.error('Error creating learning path:', err);
-      }
-    }
 
     // Step simulation
     GEN_STEPS.forEach((_, i) => {
@@ -195,7 +185,6 @@ export default function Dashboard() {
         setProgress(Math.round(((i + 1) / GEN_STEPS.length) * 100));
         if (i === GEN_STEPS.length - 1) {
           setTimeout(() => {
-            // Redirect to course page (operating-systems demo or created path)
             router.push('/course/operating-systems');
           }, 350);
         }
@@ -234,7 +223,6 @@ export default function Dashboard() {
             className="w-full max-w-sm animate-scale-in"
             style={{ background: 'var(--bg-elevated)', border: '1px solid rgba(99,102,241,0.25)', borderRadius: 20, padding: 32 }}
           >
-            {/* Spinning icon */}
             <div className="flex justify-center mb-6">
               <div className="relative w-14 h-14 flex items-center justify-center">
                 <div
@@ -252,7 +240,6 @@ export default function Dashboard() {
               "{query}"
             </p>
 
-            {/* Steps */}
             <div className="space-y-2 mb-5">
               {GEN_STEPS.map((label, i) => {
                 const done = i < step;
@@ -279,7 +266,6 @@ export default function Dashboard() {
               })}
             </div>
 
-            {/* Progress bar */}
             <div className="h-[3px] w-full rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.06)' }}>
               <div
                 className="h-full rounded-full transition-all duration-500"
@@ -296,7 +282,6 @@ export default function Dashboard() {
 
         {/* ── Hero section ─────────────────────────────────────────── */}
         <section className="flex flex-col items-center justify-center px-6 pt-16 pb-12 text-center relative">
-          {/* Ambient glow */}
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none" aria-hidden>
             <div
               className="w-[500px] h-[300px] rounded-full opacity-40"
@@ -325,8 +310,8 @@ export default function Dashboard() {
               : "Tell CYRA a new topic or prompt, and it will synthesize a complete learning path for you."}
           </p>
 
-          {/* ── Hero AI Input ─────────────────────────── */}
-          <form onSubmit={handleGenerate} className="animate-fade-up delay-225 w-full max-w-xl relative">
+          {/* ── Hero AI Input Form ─────────────────────────── */}
+          <form onSubmit={handleGenerate} className="animate-fade-up delay-225 w-full max-w-2xl relative space-y-3">
             <div className="cyra-input-wrapper flex items-center gap-3 p-2 pl-5">
               <Sparkles
                 className="w-4 h-4 flex-shrink-0 transition-colors duration-300"
@@ -347,15 +332,76 @@ export default function Dashboard() {
               <button
                 type="submit"
                 disabled={!query.trim()}
-                className="flex-shrink-0 flex items-center gap-2 px-5 py-2.5 rounded-2xl text-sm font-semibold text-white transition-all duration-200 disabled:opacity-35 disabled:pointer-events-none"
+                className="flex-shrink-0 flex items-center gap-2 px-6 py-3 rounded-2xl text-xs font-bold tracking-wide text-white uppercase transition-all duration-200 disabled:opacity-35 disabled:pointer-events-none"
                 style={{
                   background: 'linear-gradient(135deg, var(--primary) 0%, #7c3aed 50%, var(--cyan) 100%)',
                   boxShadow: query.trim() ? '0 0 20px -4px rgba(99,102,241,0.4)' : 'none',
                 }}
               >
-                Build
+                <span>Generate My Learning Path</span>
                 <ArrowRight className="w-3.5 h-3.5" />
               </button>
+            </div>
+
+            {/* ── Compact Personalization Controls ─────────────────────── */}
+            <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+              {/* Experience Level Selector */}
+              <div className="relative">
+                <select
+                  value={experienceLevel}
+                  onChange={(e) => setExperienceLevel(e.target.value as DifficultyLevel)}
+                  className="appearance-none bg-zinc-900/90 hover:bg-zinc-800/90 text-zinc-300 hover:text-white border border-zinc-800/80 rounded-xl text-[11px] font-semibold px-3 py-1.5 pr-7 focus:outline-none focus:border-indigo-500/50 cursor-pointer transition-colors"
+                >
+                  <option value="beginner">Experience: Beginner</option>
+                  <option value="intermediate">Experience: Intermediate</option>
+                  <option value="advanced">Experience: Advanced</option>
+                </select>
+                <ChevronDown className="w-3 h-3 text-zinc-500 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+              </div>
+
+              {/* Goal Selector */}
+              <div className="relative">
+                <select
+                  value={goal}
+                  onChange={(e) => setGoal(e.target.value)}
+                  className="appearance-none bg-zinc-900/90 hover:bg-zinc-800/90 text-zinc-300 hover:text-white border border-zinc-800/80 rounded-xl text-[11px] font-semibold px-3 py-1.5 pr-7 focus:outline-none focus:border-indigo-500/50 cursor-pointer transition-colors"
+                >
+                  <option value="General Learning">Goal: General Learning</option>
+                  <option value="Exam Preparation">Goal: Exam Preparation</option>
+                  <option value="Interview Preparation">Goal: Interview Preparation</option>
+                  <option value="Build a Project">Goal: Build a Project</option>
+                  <option value="Career Development">Goal: Career Development</option>
+                </select>
+                <ChevronDown className="w-3 h-3 text-zinc-500 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+              </div>
+
+              {/* Daily Study Time Selector */}
+              <div className="relative">
+                <select
+                  value={minutesPerDay}
+                  onChange={(e) => setMinutesPerDay(Number(e.target.value))}
+                  className="appearance-none bg-zinc-900/90 hover:bg-zinc-800/90 text-zinc-300 hover:text-white border border-zinc-800/80 rounded-xl text-[11px] font-semibold px-3 py-1.5 pr-7 focus:outline-none focus:border-indigo-500/50 cursor-pointer transition-colors"
+                >
+                  <option value={15}>15 min/day</option>
+                  <option value={30}>30 min/day</option>
+                  <option value={45}>45 min/day</option>
+                  <option value={60}>60 min/day</option>
+                  <option value={90}>90 min/day</option>
+                </select>
+                <ChevronDown className="w-3 h-3 text-zinc-500 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+              </div>
+
+              {/* Optional Target Date Selector */}
+              <div className="relative flex items-center">
+                <Calendar className="w-3 h-3 text-zinc-400 absolute left-2.5 pointer-events-none" />
+                <input
+                  type="date"
+                  value={targetDate}
+                  onChange={(e) => setTargetDate(e.target.value)}
+                  placeholder="Target date"
+                  className="bg-zinc-900/90 hover:bg-zinc-800/90 text-zinc-300 hover:text-white border border-zinc-800/80 rounded-xl text-[11px] font-semibold pl-7 pr-3 py-1.5 focus:outline-none focus:border-indigo-500/50 cursor-pointer transition-colors min-w-[130px]"
+                />
+              </div>
             </div>
           </form>
 
