@@ -124,13 +124,13 @@ export async function POST(request: Request) {
     );
   }
 
-  // 4. STEP B: Explicitly map & Insert `modules` records
+  // 4. STEP B: Explicitly map & Insert `modules` records (using real column name module_order)
   try {
     const modulesToInsert = pathCurriculum.modules.map((mod, index) => ({
       learning_path_id: learningPathId,
       title: mod.title,
       description: mod.description || '',
-      order_index: mod.order || index + 1,
+      module_order: mod.order || index + 1,
       status: index === 0 ? 'in_progress' : 'locked',
       progress: 0,
     }));
@@ -140,7 +140,7 @@ export async function POST(request: Request) {
     const { data: insertedModules, error: modulesError } = await supabase
       .from('modules')
       .insert(modulesToInsert)
-      .select('id, order_index, title');
+      .select('id, module_order, title');
 
     if (modulesError || !insertedModules || insertedModules.length !== modulesToInsert.length) {
       console.error(`[save-learning-path] ERROR in modules insert: ${modulesError?.code || 'COUNT_MISMATCH'} - ${modulesError?.message || 'Failed to insert all modules'}`);
@@ -157,11 +157,11 @@ export async function POST(request: Request) {
 
     console.log(`[save-learning-path] Successfully inserted ${insertedModules.length} modules.`);
 
-    // 5. STEP C: Explicitly map & Insert `lessons` records for each module
+    // 5. STEP C: Explicitly map & Insert `lessons` records for each module (using real column name lesson_order)
     const lessonsToInsert: any[] = [];
 
     pathCurriculum.modules.forEach((mod) => {
-      const insertedMod = insertedModules.find((m: any) => m.order_index === mod.order);
+      const insertedMod = insertedModules.find((m: any) => m.module_order === mod.order);
       if (insertedMod && Array.isArray(mod.lessons)) {
         mod.lessons.forEach((lesson, lIndex) => {
           lessonsToInsert.push({
@@ -170,7 +170,7 @@ export async function POST(request: Request) {
             description: lesson.description || '',
             content: lesson.keyConcepts && lesson.keyConcepts.length > 0 ? `Key Concepts: ${lesson.keyConcepts.join(', ')}` : '',
             estimated_minutes: lesson.estimatedMinutes || 15,
-            order_index: lesson.order || lIndex + 1,
+            lesson_order: lesson.order || lIndex + 1,
             status: mod.order === 1 && (lesson.order === 1 || lIndex === 0) ? 'in_progress' : 'locked',
           });
         });

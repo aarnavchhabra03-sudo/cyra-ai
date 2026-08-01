@@ -35,9 +35,10 @@ export interface ModuleRecord {
   learning_path_id: string;
   title: string;
   description?: string | null;
-  order_index: number;
+  module_order: number;
+  order_index?: number;
   status: 'completed' | 'in_progress' | 'locked';
-  progress: number;
+  progress?: number;
   created_at?: string;
 }
 
@@ -48,7 +49,8 @@ export interface LessonRecord {
   description?: string | null;
   content?: string | null;
   estimated_minutes: number;
-  order_index: number;
+  lesson_order: number;
+  order_index?: number;
   status: 'completed' | 'in_progress' | 'locked';
   created_at?: string;
 }

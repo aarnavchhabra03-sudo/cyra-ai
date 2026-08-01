@@ -103,7 +103,7 @@ CREATE TABLE IF NOT EXISTS public.modules (
   learning_path_id UUID NOT NULL REFERENCES public.learning_paths(id) ON DELETE CASCADE,
   title TEXT NOT NULL,
   description TEXT,
-  order_index INTEGER DEFAULT 0,
+  module_order INTEGER DEFAULT 0,
   status TEXT DEFAULT 'locked' CHECK (status IN ('completed', 'in_progress', 'locked')),
   progress INTEGER DEFAULT 0 CHECK (progress BETWEEN 0 AND 100),
   created_at TIMESTAMPTZ DEFAULT NOW()
@@ -167,7 +167,7 @@ CREATE TABLE IF NOT EXISTS public.lessons (
   description TEXT,
   content TEXT,
   estimated_minutes INTEGER DEFAULT 15,
-  order_index INTEGER DEFAULT 0,
+  lesson_order INTEGER DEFAULT 0,
   status TEXT DEFAULT 'locked' CHECK (status IN ('completed', 'in_progress', 'locked')),
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
