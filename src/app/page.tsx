@@ -5,12 +5,11 @@ import { useRouter } from 'next/navigation';
 import {
   ArrowRight, Flame, CheckCircle2, Circle,
   Clock, Award, BookOpen, ArrowUpRight,
-  Sparkles, Zap, ChevronRight
+  Sparkles, Zap, ChevronRight, Compass
 } from 'lucide-react';
-import {
-  mockUserStats, mockDailyTasks, mockCourses,
-  DailyTask, UserStats
-} from '@/data/mockData';
+import { createClient } from '@/lib/supabase/client';
+import { Profile, LearningPath, DailyTaskRecord } from '@/types/database';
+import { mockDailyTasks, mockCourses } from '@/data/mockData';
 
 /* ── Generation step labels ─────────────────────── */
 const GEN_STEPS = [
@@ -35,67 +34,213 @@ export default function Dashboard() {
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const [query,       setQuery]       = useState('');
-  const [generating,  setGenerating]  = useState(false);
-  const [step,        setStep]        = useState(0);
-  const [progress,    setProgress]    = useState(0);
-  const [tasks,       setTasks]       = useState<DailyTask[]>(mockDailyTasks);
-  const [stats,       setStats]       = useState<UserStats>(mockUserStats);
+  const [query, setQuery] = useState('');
+  const [generating, setGenerating] = useState(false);
+  const [step, setStep] = useState(0);
+  const [progress, setProgress] = useState(0);
   const [inputFocused, setInputFocused] = useState(false);
 
-  /* Focus input on mount for immediate engagement */
-  useEffect(() => { inputRef.current?.focus(); }, []);
+  // Supabase Data States
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [learningPaths, setLearningPaths] = useState<LearningPath[]>([]);
+  const [tasks, setTasks] = useState<DailyTaskRecord[]>([]);
+  const [loadingData, setLoadingData] = useState(true);
+  const [userId, setUserId] = useState<string | null>(null);
 
-  /* XP toggle handler */
-  const toggleTask = (id: string) => {
-    setTasks(prev => prev.map(t => {
-      if (t.id !== id) return t;
-      const next = !t.completed;
-      setStats(s => {
-        const xp = Math.max(0, s.xp + (next ? t.xpReward : -t.xpReward));
-        return { ...s, xp };
-      });
-      return { ...t, completed: next };
-    }));
+  /* Focus input on mount */
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+
+  /* Load data from Supabase */
+  useEffect(() => {
+    async function loadDashboardData() {
+      try {
+        const supabase = createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+
+        if (user) {
+          setUserId(user.id);
+
+          // 1. Fetch Profile
+          const { data: profData } = await supabase
+            .from('profiles')
+            .select('*')
+            .eq('id', user.id)
+            .single();
+
+          if (profData) {
+            setProfile(profData);
+          } else {
+            setProfile({
+              id: user.id,
+              full_name: user.user_metadata?.full_name || 'CYRA Learner',
+              xp: 0,
+              current_streak: 1,
+              longest_streak: 1,
+            });
+          }
+
+          // 2. Fetch Learning Paths
+          const { data: pathData } = await supabase
+            .from('learning_paths')
+            .select('*')
+            .eq('user_id', user.id)
+            .order('created_at', { ascending: false });
+
+          if (pathData) {
+            setLearningPaths(pathData);
+          }
+
+          // 3. Fetch Daily Tasks
+          const { data: taskData } = await supabase
+            .from('daily_tasks')
+            .select('*')
+            .eq('user_id', user.id)
+            .order('created_at', { ascending: true });
+
+          if (taskData && taskData.length > 0) {
+            setTasks(taskData);
+          } else {
+            // Seed initial daily tasks if empty
+            const initialTasks: DailyTaskRecord[] = mockDailyTasks.map(t => ({
+              id: t.id,
+              user_id: user.id,
+              title: t.title,
+              xp_reward: t.xpReward,
+              completed: t.completed,
+              category: t.category,
+              due_date: new Date().toISOString().split('T')[0],
+            }));
+            setTasks(initialTasks);
+          }
+        }
+      } catch (err) {
+        console.error('Error fetching dashboard data:', err);
+      } finally {
+        setLoadingData(false);
+      }
+    }
+
+    loadDashboardData();
+  }, []);
+
+  /* Toggle daily task */
+  const toggleTask = async (taskId: string) => {
+    const task = tasks.find(t => t.id === taskId);
+    if (!task || !userId) return;
+
+    const nextCompleted = !task.completed;
+    const xpChange = nextCompleted ? task.xp_reward : -task.xp_reward;
+
+    // Optimistic UI update
+    setTasks(prev => prev.map(t => t.id === taskId ? { ...t, completed: nextCompleted } : t));
+    setProfile(prev => prev ? { ...prev, xp: Math.max(0, prev.xp + xpChange) } : null);
+
+    try {
+      const supabase = createClient();
+      // Update task in DB if not mock task
+      if (!taskId.startsWith('task-')) {
+        await supabase.from('daily_tasks').update({ completed: nextCompleted }).eq('id', taskId);
+      }
+      // Update user profile XP
+      if (profile) {
+        await supabase.from('profiles').update({ xp: Math.max(0, profile.xp + xpChange) }).eq('id', userId);
+      }
+    } catch (err) {
+      console.error('Error updating task status:', err);
+    }
   };
 
-  /* Generation simulation */
-  const handleGenerate = (e: React.FormEvent) => {
+  /* Create Learning Path & Generation Simulation */
+  const handleGenerate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!query.trim()) return;
+
     setGenerating(true);
     setStep(0);
     setProgress(0);
 
+    const targetGoal = query.trim();
+
+    // Insert learning path into Supabase
+    let createdPathId: string | null = null;
+    if (userId) {
+      try {
+        const supabase = createClient();
+        const { data: newPath } = await supabase
+          .from('learning_paths')
+          .insert({
+            user_id: userId,
+            title: targetGoal,
+            goal: targetGoal,
+            status: 'active',
+            progress: 0,
+          })
+          .select()
+          .single();
+
+        if (newPath) {
+          createdPathId = newPath.id;
+        }
+      } catch (err) {
+        console.error('Error creating learning path:', err);
+      }
+    }
+
+    // Step simulation
     GEN_STEPS.forEach((_, i) => {
       setTimeout(() => {
         setStep(i);
         setProgress(Math.round(((i + 1) / GEN_STEPS.length) * 100));
         if (i === GEN_STEPS.length - 1) {
-          setTimeout(() => router.push('/course/operating-systems'), 350);
+          setTimeout(() => {
+            // Redirect to course page (operating-systems demo or created path)
+            router.push('/course/operating-systems');
+          }, 350);
         }
       }, 480 * (i + 1));
     });
   };
 
-  const activeCourse = mockCourses[0];
-  const xpPct = (stats.xp / stats.xpNextLevel) * 100;
-  const completedTasks = tasks.filter(t => t.completed).length;
+  const userFirstName = profile?.full_name?.split(' ')[0] || 'Learner';
+  const userXp = profile?.xp ?? 0;
+  const userStreak = profile?.current_streak ?? 1;
+  const level = Math.floor(userXp / 300) + 1;
+  const xpNextLevel = level * 300;
+  const xpPct = Math.min(100, Math.max(0, (userXp / xpNextLevel) * 100));
+  const completedTasksCount = tasks.filter(t => t.completed).length;
+
+  const hasPaths = learningPaths.length > 0;
+  const activeCourse = hasPaths
+    ? {
+        id: learningPaths[0].id,
+        title: learningPaths[0].title,
+        description: `Custom AI-synthesized pathway for ${learningPaths[0].goal}`,
+        progress: learningPaths[0].progress,
+        activeModuleName: 'Module 1: Foundations',
+      }
+    : mockCourses[0];
 
   return (
     <>
       {/* ══ Generation overlay ══════════════════════════════════════════ */}
       {generating && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 animate-fade-in"
-          style={{ background: 'rgba(7,7,10,0.88)', backdropFilter: 'blur(20px)' }}>
-          <div className="w-full max-w-sm animate-scale-in"
-            style={{ background: 'var(--bg-elevated)', border: '1px solid rgba(99,102,241,0.25)', borderRadius: 20, padding: 32 }}>
-
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 animate-fade-in"
+          style={{ background: 'rgba(7,7,10,0.88)', backdropFilter: 'blur(20px)' }}
+        >
+          <div
+            className="w-full max-w-sm animate-scale-in"
+            style={{ background: 'var(--bg-elevated)', border: '1px solid rgba(99,102,241,0.25)', borderRadius: 20, padding: 32 }}
+          >
             {/* Spinning icon */}
             <div className="flex justify-center mb-6">
               <div className="relative w-14 h-14 flex items-center justify-center">
-                <div className="absolute inset-0 rounded-full animate-spin-slow"
-                  style={{ background: 'conic-gradient(from 0deg, transparent 0%, var(--primary) 60%, var(--cyan) 100%)', padding: 2 }}>
+                <div
+                  className="absolute inset-0 rounded-full animate-spin-slow"
+                  style={{ background: 'conic-gradient(from 0deg, transparent 0%, var(--primary) 60%, var(--cyan) 100%)', padding: 2 }}
+                >
                   <div className="w-full h-full rounded-full" style={{ background: 'var(--bg-elevated)' }} />
                 </div>
                 <Zap className="w-5 h-5 relative z-10 text-cyan-400" />
@@ -110,16 +255,21 @@ export default function Dashboard() {
             {/* Steps */}
             <div className="space-y-2 mb-5">
               {GEN_STEPS.map((label, i) => {
-                const done    = i < step;
+                const done = i < step;
                 const current = i === step;
                 return (
-                  <div key={i} className="flex items-center gap-2.5 text-[11px]"
-                    style={{ color: done ? 'var(--emerald)' : current ? '#fff' : 'var(--text-muted)' }}>
-                    <span className="w-3.5 h-3.5 flex-shrink-0 flex items-center justify-center rounded-full text-[8px] font-bold"
+                  <div
+                    key={i}
+                    className="flex items-center gap-2.5 text-[11px]"
+                    style={{ color: done ? 'var(--emerald)' : current ? '#fff' : 'var(--text-muted)' }}
+                  >
+                    <span
+                      className="w-3.5 h-3.5 flex-shrink-0 flex items-center justify-center rounded-full text-[8px] font-bold"
                       style={{
                         background: done ? 'rgba(52,211,153,0.15)' : current ? 'rgba(99,102,241,0.2)' : 'rgba(255,255,255,0.04)',
-                        border: `1px solid ${done ? 'rgba(52,211,153,0.4)' : current ? 'rgba(99,102,241,0.4)' : 'rgba(255,255,255,0.06)'}`
-                      }}>
+                        border: `1px solid ${done ? 'rgba(52,211,153,0.4)' : current ? 'rgba(99,102,241,0.4)' : 'rgba(255,255,255,0.06)'}`,
+                      }}
+                    >
                       {done ? '✓' : i + 1}
                     </span>
                     {label}
@@ -131,8 +281,10 @@ export default function Dashboard() {
 
             {/* Progress bar */}
             <div className="h-[3px] w-full rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.06)' }}>
-              <div className="h-full rounded-full transition-all duration-500"
-                style={{ width: `${progress}%`, background: 'linear-gradient(90deg, var(--primary), var(--cyan))' }} />
+              <div
+                className="h-full rounded-full transition-all duration-500"
+                style={{ width: `${progress}%`, background: 'linear-gradient(90deg, var(--primary), var(--cyan))' }}
+              />
             </div>
             <p className="text-right text-[9px] font-mono mt-1.5" style={{ color: 'var(--text-muted)' }}>{progress}%</p>
           </div>
@@ -141,37 +293,41 @@ export default function Dashboard() {
 
       {/* ══ Main page ═══════════════════════════════════════════════════ */}
       <div className="min-h-screen flex flex-col">
-        
+
         {/* ── Hero section ─────────────────────────────────────────── */}
-        <section className="flex flex-col items-center justify-center px-6 pt-20 pb-14 text-center relative">
-          {/* Ambient glow behind input */}
+        <section className="flex flex-col items-center justify-center px-6 pt-16 pb-12 text-center relative">
+          {/* Ambient glow */}
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none" aria-hidden>
-            <div className="w-[500px] h-[300px] rounded-full opacity-40"
-              style={{ background: 'radial-gradient(ellipse, rgba(99,102,241,0.12) 0%, transparent 70%)', filter: 'blur(40px)' }} />
+            <div
+              className="w-[500px] h-[300px] rounded-full opacity-40"
+              style={{ background: 'radial-gradient(ellipse, rgba(99,102,241,0.12) 0%, transparent 70%)', filter: 'blur(40px)' }}
+            />
           </div>
 
-          {/* Eyebrow label */}
-          <div className="animate-fade-up flex items-center gap-2 mb-6 px-3 py-1.5 rounded-full text-[11px] font-medium"
-            style={{ background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.2)', color: '#a5b4fc' }}>
-            <Zap className="w-3 h-3" />
-            AI-powered learning workspace
+          {/* User Welcome Eyebrow */}
+          <div
+            className="animate-fade-up flex items-center gap-2 mb-6 px-3.5 py-1.5 rounded-full text-xs font-medium"
+            style={{ background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.2)', color: '#a5b4fc' }}
+          >
+            <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
+            <span>Welcome back, <strong className="text-white font-bold">{userFirstName}</strong></span>
           </div>
 
           {/* Headline */}
-          <h1 className="animate-fade-up delay-75 text-[40px] font-extrabold leading-[1.12] tracking-tight text-white max-w-xl mb-3">
+          <h1 className="animate-fade-up delay-75 text-[38px] md:text-[44px] font-extrabold leading-[1.12] tracking-tight text-white max-w-xl mb-3">
             What do you want<br />
             <span className="text-gradient-brand">to learn today?</span>
           </h1>
 
-          <p className="animate-fade-up delay-150 text-sm max-w-sm mb-10 leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
-            Tell CYRA a topic and it will build a complete, personalized learning experience — roadmap, notes, quizzes, and a tutor.
+          <p className="animate-fade-up delay-150 text-sm max-w-md mb-8 leading-relaxed text-zinc-400">
+            {!hasPaths
+              ? "Your learning journey starts here. Enter any topic below and CYRA will build your personalized workspace."
+              : "Tell CYRA a new topic or prompt, and it will synthesize a complete learning path for you."}
           </p>
 
           {/* ── Hero AI Input ─────────────────────────── */}
-          <form onSubmit={handleGenerate}
-            className="animate-fade-up delay-225 w-full max-w-xl relative">
+          <form onSubmit={handleGenerate} className="animate-fade-up delay-225 w-full max-w-xl relative">
             <div className="cyra-input-wrapper flex items-center gap-3 p-2 pl-5">
-              {/* Icon */}
               <Sparkles
                 className="w-4 h-4 flex-shrink-0 transition-colors duration-300"
                 style={{ color: inputFocused ? 'var(--cyan)' : 'var(--text-muted)' }}
@@ -179,7 +335,7 @@ export default function Dashboard() {
               <input
                 ref={inputRef}
                 type="text"
-                placeholder="e.g., Operating Systems, Machine Learning, Rust…"
+                placeholder="e.g., Learn Operating Systems, Master Machine Learning..."
                 value={query}
                 onChange={e => setQuery(e.target.value)}
                 onFocus={() => setInputFocused(true)}
@@ -194,7 +350,7 @@ export default function Dashboard() {
                 className="flex-shrink-0 flex items-center gap-2 px-5 py-2.5 rounded-2xl text-sm font-semibold text-white transition-all duration-200 disabled:opacity-35 disabled:pointer-events-none"
                 style={{
                   background: 'linear-gradient(135deg, var(--primary) 0%, #7c3aed 50%, var(--cyan) 100%)',
-                  boxShadow: query.trim() ? '0 0 20px -4px rgba(99,102,241,0.4)' : 'none'
+                  boxShadow: query.trim() ? '0 0 20px -4px rgba(99,102,241,0.4)' : 'none',
                 }}
               >
                 Build
@@ -203,7 +359,7 @@ export default function Dashboard() {
             </div>
           </form>
 
-          {/* Prompt pills */}
+          {/* Prompt suggestions */}
           <div className="animate-fade-up delay-300 flex flex-wrap items-center justify-center gap-2 mt-5">
             {PROMPTS.map(p => (
               <button key={p} className="prompt-pill" onClick={() => { setQuery(p); inputRef.current?.focus(); }}>
@@ -213,110 +369,130 @@ export default function Dashboard() {
           </div>
         </section>
 
-        {/* ── Body content ─────────────────────────────────────────── */}
+        {/* ── Workspace Content Section ─────────────────────────────── */}
         <section className="flex-1 px-8 pb-12 max-w-5xl mx-auto w-full">
-          
-          {/* Section divider */}
+
           <div className="flex items-center gap-4 mb-8">
             <div className="divider-line flex-1" />
             <span className="text-[10px] font-semibold tracking-widest uppercase" style={{ color: 'var(--text-muted)' }}>
-              Your workspace
+              Your active workspace
             </span>
             <div className="divider-line flex-1" />
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
 
-            {/* ── LEFT: Course + Stats (7 cols) ──────── */}
+            {/* ── LEFT: Learning Paths / Active Course + Stats ──────── */}
             <div className="lg:col-span-7 space-y-4">
 
-              {/* Active course card */}
-              <div
-                onClick={() => router.push(`/course/${activeCourse.id}`)}
-                className="glass-card p-6 cursor-pointer group relative overflow-hidden"
-              >
-                {/* Hover glow */}
-                <div className="absolute -top-10 -right-10 w-48 h-48 rounded-full opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none"
-                  style={{ background: 'radial-gradient(circle, rgba(34,211,238,0.08) 0%, transparent 70%)' }} />
-
-                <div className="flex items-start justify-between gap-4">
-                  <div className="flex-1 min-w-0">
-                    <span className="inline-flex items-center gap-1.5 text-[9px] font-bold tracking-widest uppercase px-2 py-1 rounded-md mb-3"
-                      style={{ background: 'rgba(34,211,238,0.08)', color: 'var(--cyan)', border: '1px solid rgba(34,211,238,0.2)' }}>
-                      <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
-                      Active course
-                    </span>
-                    <h2 className="text-xl font-bold text-white leading-tight mb-2 group-hover:text-cyan-300 transition-colors flex items-center gap-2">
-                      {activeCourse.title}
-                      <ArrowUpRight className="w-4 h-4 opacity-0 group-hover:opacity-100 transition-all duration-200 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 text-cyan-400" />
-                    </h2>
-                    <p className="text-xs leading-relaxed line-clamp-2" style={{ color: 'var(--text-secondary)' }}>
-                      {activeCourse.description}
+              {!hasPaths ? (
+                /* Polished Empty State */
+                <div className="glass-card p-8 text-center space-y-4 border border-indigo-500/20">
+                  <div className="w-12 h-12 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center mx-auto text-cyan-400">
+                    <Compass className="w-6 h-6 animate-pulse" />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-bold text-white">Your learning journey starts here.</h3>
+                    <p className="text-xs text-zinc-400 mt-1 max-w-sm mx-auto">
+                      No active learning paths created yet. Type what you want to learn above and CYRA will build your custom roadmap.
                     </p>
                   </div>
+                </div>
+              ) : (
+                /* Active Course Card */
+                <div
+                  onClick={() => router.push('/course/operating-systems')}
+                  className="glass-card p-6 cursor-pointer group relative overflow-hidden"
+                >
+                  <div
+                    className="absolute -top-10 -right-10 w-48 h-48 rounded-full opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none"
+                    style={{ background: 'radial-gradient(circle, rgba(34,211,238,0.08) 0%, transparent 70%)' }}
+                  />
 
-                  {/* Radial progress ring */}
-                  <div className="flex-shrink-0 relative w-14 h-14">
-                    <svg width="56" height="56" viewBox="0 0 56 56" className="-rotate-90">
-                      <defs>
-                        <linearGradient id="ringGrad" x1="0%" y1="0%" x2="100%" y2="0%">
-                          <stop offset="0%" stopColor="#6366f1" />
-                          <stop offset="100%" stopColor="#22d3ee" />
-                        </linearGradient>
-                      </defs>
-                      <circle cx="28" cy="28" r="22" className="progress-ring-track" strokeWidth="3.5" fill="none" />
-                      <circle cx="28" cy="28" r="22" className="progress-ring-fill" strokeWidth="3.5" fill="none"
-                        strokeDasharray={`${2 * Math.PI * 22}`}
-                        strokeDashoffset={`${2 * Math.PI * 22 * (1 - activeCourse.progress / 100)}`}
-                        strokeLinecap="round" />
-                    </svg>
-                    <span className="absolute inset-0 flex items-center justify-center text-[11px] font-bold font-mono text-white">
-                      {activeCourse.progress}%
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex-1 min-w-0">
+                      <span
+                        className="inline-flex items-center gap-1.5 text-[9px] font-bold tracking-widest uppercase px-2 py-1 rounded-md mb-3"
+                        style={{ background: 'rgba(34,211,238,0.08)', color: 'var(--cyan)', border: '1px solid rgba(34,211,238,0.2)' }}
+                      >
+                        <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
+                        Active learning path
+                      </span>
+                      <h2 className="text-xl font-bold text-white leading-tight mb-2 group-hover:text-cyan-300 transition-colors flex items-center gap-2">
+                        {activeCourse.title}
+                        <ArrowUpRight className="w-4 h-4 opacity-0 group-hover:opacity-100 transition-all duration-200 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 text-cyan-400" />
+                      </h2>
+                      <p className="text-xs leading-relaxed line-clamp-2" style={{ color: 'var(--text-secondary)' }}>
+                        {activeCourse.description}
+                      </p>
+                    </div>
+
+                    <div className="flex-shrink-0 relative w-14 h-14">
+                      <svg width="56" height="56" viewBox="0 0 56 56" className="-rotate-90">
+                        <defs>
+                          <linearGradient id="ringGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+                            <stop offset="0%" stopColor="#6366f1" />
+                            <stop offset="100%" stopColor="#22d3ee" />
+                          </linearGradient>
+                        </defs>
+                        <circle cx="28" cy="28" r="22" className="progress-ring-track" strokeWidth="3.5" fill="none" />
+                        <circle
+                          cx="28"
+                          cy="28"
+                          r="22"
+                          className="progress-ring-fill"
+                          strokeWidth="3.5"
+                          fill="none"
+                          strokeDasharray={`${2 * Math.PI * 22}`}
+                          strokeDashoffset={`${2 * Math.PI * 22 * (1 - activeCourse.progress / 100)}`}
+                          strokeLinecap="round"
+                        />
+                      </svg>
+                      <span className="absolute inset-0 flex items-center justify-center text-[11px] font-bold font-mono text-white">
+                        {activeCourse.progress}%
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="mt-5 pt-4 flex items-center justify-between" style={{ borderTop: '1px solid var(--border)' }}>
+                    <div>
+                      <p className="text-[10px] font-medium mb-0.5" style={{ color: 'var(--text-muted)' }}>Current module</p>
+                      <p className="text-xs font-semibold text-white">{activeCourse.activeModuleName}</p>
+                    </div>
+                    <span className="flex items-center gap-1.5 text-[11px] font-semibold transition-colors group-hover:underline" style={{ color: 'var(--cyan)' }}>
+                      Enter Workspace
+                      <ChevronRight className="w-3.5 h-3.5" />
                     </span>
                   </div>
                 </div>
-
-                {/* Footer */}
-                <div className="mt-5 pt-4 flex items-center justify-between"
-                  style={{ borderTop: '1px solid var(--border)' }}>
-                  <div>
-                    <p className="text-[10px] font-medium mb-0.5" style={{ color: 'var(--text-muted)' }}>Current module</p>
-                    <p className="text-xs font-semibold text-white">{activeCourse.activeModuleName}</p>
-                  </div>
-                  <span className="flex items-center gap-1.5 text-[11px] font-semibold transition-colors group-hover:underline"
-                    style={{ color: 'var(--cyan)' }}>
-                    Resume
-                    <ChevronRight className="w-3.5 h-3.5" />
-                  </span>
-                </div>
-              </div>
+              )}
 
               {/* Stat pills row */}
               <div className="grid grid-cols-3 gap-3">
                 {[
                   {
-                    label: 'Study Time',
-                    value: `${stats.studyHoursThisWeek}h`,
-                    sub: 'this week',
+                    label: 'Learning Paths',
+                    value: `${learningPaths.length}`,
+                    sub: 'active paths',
                     color: '#818cf8',
                     bg: 'rgba(99,102,241,0.08)',
-                    icon: Clock
+                    icon: BookOpen,
                   },
                   {
                     label: 'XP Earned',
-                    value: `${stats.xp}`,
-                    sub: `of ${stats.xpNextLevel} XP`,
+                    value: `${userXp}`,
+                    sub: `Level ${level}`,
                     color: 'var(--emerald)',
                     bg: 'rgba(52,211,153,0.08)',
-                    icon: Award
+                    icon: Award,
                   },
                   {
                     label: 'Streak',
-                    value: `${stats.streakDays}`,
+                    value: `${userStreak}`,
                     sub: 'days active',
                     color: 'var(--amber)',
                     bg: 'rgba(251,191,36,0.08)',
-                    icon: Flame
+                    icon: Flame,
                   },
                 ].map(({ label, value, sub, color, bg, icon: Icon }) => (
                   <div key={label} className="stat-card p-4 flex flex-col gap-2">
@@ -335,26 +511,27 @@ export default function Dashboard() {
               </div>
             </div>
 
-            {/* ── RIGHT: Daily Tasks (5 cols) ─────────── */}
+            {/* ── RIGHT: Daily Tasks ─────────── */}
             <div className="lg:col-span-5 space-y-4">
               <div className="flex items-center justify-between">
                 <div>
                   <h3 className="text-sm font-bold text-white">Daily Tasks</h3>
                   <p className="text-[10px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                    {completedTasks} of {tasks.length} completed
+                    {completedTasksCount} of {tasks.length} completed
                   </p>
                 </div>
-                {/* Mini progress */}
                 <div className="flex items-center gap-2">
                   <div className="w-20 h-1.5 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.06)' }}>
-                    <div className="h-full rounded-full transition-all duration-500"
+                    <div
+                      className="h-full rounded-full transition-all duration-500"
                       style={{
-                        width: `${(completedTasks / tasks.length) * 100}%`,
-                        background: 'linear-gradient(90deg, var(--primary), var(--cyan))'
-                      }} />
+                        width: tasks.length ? `${(completedTasksCount / tasks.length) * 100}%` : '0%',
+                        background: 'linear-gradient(90deg, var(--primary), var(--cyan))',
+                      }}
+                    />
                   </div>
                   <span className="text-[9px] font-mono" style={{ color: 'var(--text-muted)' }}>
-                    {Math.round((completedTasks / tasks.length) * 100)}%
+                    {tasks.length ? Math.round((completedTasksCount / tasks.length) * 100) : 0}%
                   </span>
                 </div>
               </div>
@@ -370,55 +547,64 @@ export default function Dashboard() {
                       background: task.completed ? 'rgba(255,255,255,0.02)' : 'var(--bg-raised)',
                       border: `1px solid ${task.completed ? 'var(--border)' : 'var(--border-hover)'}`,
                       opacity: task.completed ? 0.55 : 1,
-                      animationDelay: `${i * 60}ms`
                     }}
                   >
-                    {/* Checkbox */}
                     <div className="flex-shrink-0 transition-transform duration-200 group-hover:scale-110">
-                      {task.completed
-                        ? <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                        : <Circle className="w-4 h-4 transition-colors group-hover:stroke-indigo-400 text-gray-600" />
-                      }
+                      {task.completed ? (
+                        <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                      ) : (
+                        <Circle className="w-4 h-4 transition-colors group-hover:stroke-indigo-400 text-gray-600" />
+                      )}
                     </div>
 
-                    <span className={`flex-1 text-xs font-medium leading-snug ${task.completed ? 'line-through' : 'text-white'}`}
-                      style={task.completed ? { color: 'var(--text-muted)' } : {}}>
+                    <span
+                      className={`flex-1 text-xs font-medium leading-snug ${task.completed ? 'line-through' : 'text-white'}`}
+                      style={task.completed ? { color: 'var(--text-muted)' } : {}}
+                    >
                       {task.title}
                     </span>
 
-                    <span className="flex-shrink-0 text-[9px] font-mono font-bold px-2 py-1 rounded-lg"
+                    <span
+                      className="flex-shrink-0 text-[9px] font-mono font-bold px-2 py-1 rounded-lg"
                       style={{
                         background: task.completed ? 'rgba(255,255,255,0.04)' : 'rgba(99,102,241,0.1)',
                         color: task.completed ? 'var(--text-muted)' : '#a5b4fc',
-                        border: `1px solid ${task.completed ? 'var(--border)' : 'rgba(99,102,241,0.2)'}`
-                      }}>
-                      +{task.xpReward} XP
+                        border: `1px solid ${task.completed ? 'var(--border)' : 'rgba(99,102,241,0.2)'}`,
+                      }}
+                    >
+                      +{task.xp_reward} XP
                     </span>
                   </div>
                 ))}
               </div>
 
-              {/* XP level-up nudge */}
-              <div className="p-4 rounded-2xl relative overflow-hidden"
-                style={{ background: 'linear-gradient(135deg, rgba(99,102,241,0.08) 0%, rgba(34,211,238,0.04) 100%)', border: '1px solid rgba(99,102,241,0.15)' }}>
+              {/* Level up banner */}
+              <div
+                className="p-4 rounded-2xl relative overflow-hidden"
+                style={{
+                  background: 'linear-gradient(135deg, rgba(99,102,241,0.08) 0%, rgba(34,211,238,0.04) 100%)',
+                  border: '1px solid rgba(99,102,241,0.15)',
+                }}
+              >
                 <div className="flex items-start gap-3">
-                  <div className="flex-shrink-0 w-8 h-8 rounded-xl flex items-center justify-center"
-                    style={{ background: 'rgba(99,102,241,0.15)', border: '1px solid rgba(99,102,241,0.25)' }}>
+                  <div
+                    className="flex-shrink-0 w-8 h-8 rounded-xl flex items-center justify-center"
+                    style={{ background: 'rgba(99,102,241,0.15)', border: '1px solid rgba(99,102,241,0.25)' }}
+                  >
                     <Zap className="w-4 h-4 text-indigo-300" />
                   </div>
                   <div>
-                    <p className="text-xs font-bold text-white mb-0.5">Level {stats.level + 1} incoming</p>
+                    <p className="text-xs font-bold text-white mb-0.5">Level {level + 1} incoming</p>
                     <p className="text-[10px] leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
-                      {stats.xpNextLevel - stats.xp} more XP to reach{' '}
-                      <span className="text-white font-semibold">Thread Weaver</span>
+                      {xpNextLevel - userXp} more XP to reach next rank
                     </p>
                   </div>
                 </div>
-                {/* XP bar */}
                 <div className="mt-3 h-1 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.06)' }}>
                   <div className="h-full rounded-full" style={{ width: `${xpPct}%`, background: 'linear-gradient(90deg, var(--primary), var(--cyan))' }} />
                 </div>
               </div>
+
             </div>
           </div>
         </section>

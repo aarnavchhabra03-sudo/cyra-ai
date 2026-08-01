@@ -1,12 +1,13 @@
 'use client';
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import {
-  Home, BookOpen, Search, GraduationCap, TrendingUp, Bot, Settings, User, Zap, Flame
+  Home, BookOpen, Search, GraduationCap, TrendingUp, Bot, Settings, User, Zap, Flame, LogOut
 } from 'lucide-react';
-import { mockUserStats } from '@/data/mockData';
+import { createClient } from '@/lib/supabase/client';
+import { Profile } from '@/types/database';
 
 const mainNav = [
   { label: 'Home',       href: '/',                         icon: Home },
@@ -24,11 +25,68 @@ const bottomNav = [
 
 export default function Sidebar() {
   const pathname = usePathname();
+  const router = useRouter();
+  const [profile, setProfile] = useState<Profile | null>(null);
+
+  // If on login or signup pages, don't show sidebar
+  if (pathname === '/login' || pathname === '/signup') {
+    return null;
+  }
+
+  useEffect(() => {
+    async function loadProfile() {
+      try {
+        const supabase = createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+
+        if (user) {
+          const { data } = await supabase
+            .from('profiles')
+            .select('*')
+            .eq('id', user.id)
+            .single();
+
+          if (data) {
+            setProfile(data);
+          } else {
+            // Fallback profile if record creation was delayed
+            setProfile({
+              id: user.id,
+              full_name: user.user_metadata?.full_name || user.email?.split('@')[0] || 'Learner',
+              xp: 0,
+              current_streak: 1,
+              longest_streak: 1,
+            });
+          }
+        }
+      } catch (err) {
+        console.error('Error loading user profile:', err);
+      }
+    }
+
+    loadProfile();
+  }, [pathname]);
+
+  const handleSignOut = async () => {
+    try {
+      const supabase = createClient();
+      await supabase.auth.signOut();
+      router.push('/login');
+      router.refresh();
+    } catch (err) {
+      console.error('Error signing out:', err);
+    }
+  };
 
   const isActive = (href: string) =>
     href === '/' ? pathname === '/' : pathname.startsWith(href);
 
-  const xpPct = (mockUserStats.xp / mockUserStats.xpNextLevel) * 100;
+  const userName = profile?.full_name || 'CYRA User';
+  const userXp = profile?.xp ?? 0;
+  const userStreak = profile?.current_streak ?? 1;
+  const level = Math.floor(userXp / 300) + 1;
+  const xpNextLevel = level * 300;
+  const xpPct = Math.min(100, Math.max(0, (userXp / xpNextLevel) * 100));
 
   return (
     <aside
@@ -38,12 +96,10 @@ export default function Sidebar() {
       {/* ── Logo ── */}
       <div className="px-5 py-6">
         <Link href="/" className="flex items-center gap-3 group">
-          {/* Icon mark */}
           <div className="relative flex-shrink-0">
             <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-indigo-500 via-violet-500 to-cyan-400 flex items-center justify-center shadow-lg shadow-indigo-500/25 group-hover:shadow-indigo-500/40 transition-shadow duration-300">
               <Zap className="w-4 h-4 text-white" strokeWidth={2.5} />
             </div>
-            {/* Glow dot */}
             <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-cyan-400 border-2 border-[var(--bg)] shadow-[0_0_6px_#22d3ee]" />
           </div>
 
@@ -92,6 +148,15 @@ export default function Sidebar() {
           </Link>
         ))}
 
+        {/* Sign Out Button */}
+        <button
+          onClick={handleSignOut}
+          className="nav-item w-full text-left text-red-400 hover:text-red-300 hover:bg-red-500/10 transition-colors"
+        >
+          <LogOut className="w-4 h-4 flex-shrink-0" />
+          <span>Sign Out</span>
+        </button>
+
         <div className="divider-line my-3" />
 
         {/* User card */}
@@ -101,15 +166,15 @@ export default function Sidebar() {
         >
           {/* Avatar */}
           <div
-            className="w-8 h-8 rounded-full flex-shrink-0 flex items-center justify-center text-xs font-bold text-white"
+            className="w-8 h-8 rounded-full flex-shrink-0 flex items-center justify-center text-xs font-bold text-white uppercase"
             style={{ background: 'linear-gradient(135deg, #6366f1, #22d3ee)' }}
           >
-            {mockUserStats.name[0]}
+            {userName[0]}
           </div>
 
           <div className="flex-1 min-w-0">
             <div className="flex items-center justify-between mb-1.5">
-              <span className="text-xs font-semibold text-white truncate">{mockUserStats.name}</span>
+              <span className="text-xs font-semibold text-white truncate">{userName}</span>
               <span
                 className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded-md ml-1 flex-shrink-0"
                 style={{
@@ -118,7 +183,7 @@ export default function Sidebar() {
                   border: '1px solid rgba(99,102,241,0.25)'
                 }}
               >
-                Lv {mockUserStats.level}
+                Lv {level}
               </span>
             </div>
 
@@ -134,8 +199,8 @@ export default function Sidebar() {
             </div>
             <div className="flex items-center gap-1.5 mt-1.5">
               <Flame className="w-3 h-3 text-amber-500" />
-              <span className="text-[9px] text-[var(--text-muted)]">{mockUserStats.streakDays} day streak</span>
-              <span className="ml-auto text-[9px] font-mono text-[var(--text-muted)]">{mockUserStats.xp} XP</span>
+              <span className="text-[9px] text-[var(--text-muted)]">{userStreak} day streak</span>
+              <span className="ml-auto text-[9px] font-mono text-[var(--text-muted)]">{userXp} XP</span>
             </div>
           </div>
         </div>
