@@ -1,5 +1,6 @@
 import { GoogleGenAI } from '@google/genai';
-import { AIProvider, AIGenerateOptions, AIResponse } from './types';
+import { AIProvider, AIGenerateOptions, AIResponse, AILearningPathResponse } from './types';
+import { validateLearningPath, LearningPathGeneration } from '@/types/ai';
 
 export const GEMINI_MODEL = 'gemini-2.0-flash-lite';
 
@@ -64,6 +65,61 @@ export class GeminiProvider implements AIProvider {
         provider: 'gemini',
         model: GEMINI_MODEL,
         error: error?.message || 'Failed to communicate with Gemini API.',
+        code: 'PROVIDER_ERROR',
+      };
+    }
+  }
+
+  async generateLearningPath(
+    prompt: string,
+    context?: { experienceLevel?: string; minutesPerDay?: number }
+  ): Promise<AILearningPathResponse> {
+    const apiKey = process.env.GEMINI_API_KEY;
+
+    if (!apiKey) {
+      return {
+        success: false,
+        provider: 'gemini',
+        model: GEMINI_MODEL,
+        error: 'GEMINI_API_KEY is not configured in environment variables.',
+        code: 'MISSING_API_KEY',
+      };
+    }
+
+    try {
+      const ai = new GoogleGenAI({ apiKey });
+
+      const response = await ai.models.generateContent({
+        model: GEMINI_MODEL,
+        contents: `Generate a personalized learning path JSON for "${prompt}". Include title, description, difficulty, estimatedWeeks, weeklyHours, prerequisites, learningOutcomes, modules (with title, description, order, estimatedHours, objectives, lessons).`,
+      });
+
+      const rawText = response.text?.trim();
+      if (!rawText) {
+        return {
+          success: false,
+          provider: 'gemini',
+          model: GEMINI_MODEL,
+          error: 'Empty response from Gemini.',
+          code: 'EMPTY_RESPONSE',
+        };
+      }
+
+      const parsed = JSON.parse(rawText.replace(/```json|```/g, '').trim());
+      const validated = validateLearningPath(parsed);
+
+      return {
+        success: true,
+        data: validated,
+        provider: 'gemini',
+        model: GEMINI_MODEL,
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        provider: 'gemini',
+        model: GEMINI_MODEL,
+        error: error?.message || 'Gemini learning path generation failed.',
         code: 'PROVIDER_ERROR',
       };
     }
