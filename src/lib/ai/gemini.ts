@@ -1,5 +1,5 @@
 import { GoogleGenAI } from '@google/genai';
-import { AIProvider, AIGenerateOptions, AIResponse, AILearningPathResponse } from './types';
+import { AIProvider, AIGenerateOptions, AIResponse, AILearningPathResponse, GenerateLearningPathOptions } from './types';
 import { validateLearningPath, LearningPathGeneration } from '@/types/ai';
 
 export const GEMINI_MODEL = 'gemini-2.0-flash-lite';
@@ -71,8 +71,7 @@ export class GeminiProvider implements AIProvider {
   }
 
   async generateLearningPath(
-    prompt: string,
-    context?: { experienceLevel?: string; minutesPerDay?: number }
+    options: GenerateLearningPathOptions
   ): Promise<AILearningPathResponse> {
     const apiKey = process.env.GEMINI_API_KEY;
 
@@ -91,7 +90,7 @@ export class GeminiProvider implements AIProvider {
 
       const response = await ai.models.generateContent({
         model: GEMINI_MODEL,
-        contents: `Generate a personalized learning path JSON for "${prompt}". Include title, description, difficulty, estimatedWeeks, weeklyHours, prerequisites, learningOutcomes, modules (with title, description, order, estimatedHours, objectives, lessons).`,
+        contents: `Generate a personalized learning path JSON for topic "${options.topic}" (Difficulty: ${options.experienceLevel}, Goal: ${options.goal}, Minutes/day: ${options.minutesPerDay}). Include title, description, difficulty, estimatedWeeks, weeklyHours, prerequisites, learningOutcomes, modules (with title, description, order, estimatedHours, objectives, lessons).`,
       });
 
       const rawText = response.text?.trim();

@@ -1,4 +1,4 @@
-import { LearningPathGeneration } from '@/types/ai';
+import { LearningPathGeneration, DifficultyLevel } from '@/types/ai';
 
 export type AIProviderName = 'groq' | 'gemini';
 
@@ -8,6 +8,14 @@ export interface AIGenerateOptions {
   temperature?: number;
   maxTokens?: number;
   responseFormat?: 'text' | 'json';
+}
+
+export interface GenerateLearningPathOptions {
+  topic: string;
+  experienceLevel: DifficultyLevel;
+  goal: string;
+  minutesPerDay: number;
+  targetDate?: string;
 }
 
 export interface AIResponse {
@@ -31,8 +39,5 @@ export interface AILearningPathResponse {
 export interface AIProvider {
   name: AIProviderName;
   generateContent(options: AIGenerateOptions): Promise<AIResponse>;
-  generateLearningPath(
-    prompt: string,
-    context?: { experienceLevel?: string; minutesPerDay?: number }
-  ): Promise<AILearningPathResponse>;
+  generateLearningPath(options: GenerateLearningPathOptions): Promise<AILearningPathResponse>;
 }

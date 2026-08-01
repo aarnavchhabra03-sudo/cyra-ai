@@ -1,34 +1,34 @@
 import Groq from 'groq-sdk';
-import { AIProvider, AIGenerateOptions, AIResponse, AILearningPathResponse } from './types';
+import { AIProvider, AIGenerateOptions, AIResponse, AILearningPathResponse, GenerateLearningPathOptions } from './types';
 import { validateLearningPath, LearningPathGeneration } from '@/types/ai';
 
 // Centralized Groq model definition
 export const GROQ_MODEL = 'llama-3.3-70b-versatile';
 
-const SYSTEM_LEARNING_PATH_INSTRUCTION = `You are CYRA AI, an expert educational curriculum architect.
-Your task is to synthesize a structured, personalized learning path for the user's requested goal.
+const SYSTEM_CURRICULUM_ARCHITECT_INSTRUCTION = `You are CYRA AI, an elite curriculum architect and AI tutor.
+Your role is to design highly tailored, realistic, and high-impact learning paths.
 
-You MUST respond strictly with a valid JSON object adhering to this schema:
+You MUST respond strictly with a valid JSON object matching this schema:
 
 {
-  "title": "Clear concise learning path title",
-  "description": "Comprehensive summary of what this curriculum covers",
+  "title": "Clear, compelling title for the personalized learning path",
+  "description": "2-3 sentence overview explaining how this curriculum achieves the user's specific learning goal",
   "difficulty": "beginner" | "intermediate" | "advanced",
   "estimatedWeeks": number (positive integer, e.g. 4),
   "weeklyHours": number (positive integer, e.g. 5),
-  "prerequisites": ["List of prerequisite concepts or skills"],
-  "learningOutcomes": ["Key skill outcomes the student will master"],
+  "prerequisites": ["List of essential prerequisite knowledge or skills"],
+  "learningOutcomes": ["Key measurable skill outcomes the student will master"],
   "modules": [
     {
       "title": "Module 1: Title",
-      "description": "Module description",
+      "description": "Module overview focusing on target objectives",
       "order": 1,
       "estimatedHours": number (positive integer),
-      "objectives": ["Module learning objectives"],
+      "objectives": ["Specific module learning objectives"],
       "lessons": [
         {
           "title": "Lesson 1.1: Title",
-          "description": "Lesson summary",
+          "description": "Lesson summary and scope",
           "order": 1,
           "estimatedMinutes": number (positive integer),
           "keyConcepts": ["Key concept 1", "Key concept 2"]
@@ -38,12 +38,24 @@ You MUST respond strictly with a valid JSON object adhering to this schema:
   ]
 }
 
-CRITICAL RULES:
-1. Return ONLY the JSON object. Do not include markdown codeblock wrappers like \`\`\`json.
-2. Provide at least 3 distinct modules, and each module must contain at least 2 lessons.
-3. Ensure 'order' fields start at 1 and increment sequentially.
-4. Ensure all numerical fields (estimatedWeeks, weeklyHours, estimatedHours, estimatedMinutes) are positive numbers.
-5. 'difficulty' MUST be one of: "beginner", "intermediate", or "advanced".`;
+PERSONALIZATION & GOAL ORIENTATION RULES:
+1. If Goal is "Exam Preparation": Emphasize core syllabus coverage, fundamental principles, revision checkpoints, and problem-solving mastery.
+2. If Goal is "Interview Preparation": Emphasize high-frequency interview questions, system design/algorithmic reasoning, trade-off analysis, and technical communication.
+3. If Goal is "Build a Project": Emphasize hands-on building, architecture design, practical implementation milestones, and real-world deployment.
+4. If Goal is "Career Development": Emphasize industry-standard practices, production-ready tools, workflow efficiency, and career-relevant technical skills.
+5. If Goal is "General Learning": Balance conceptual depth with practical understanding.
+
+EXPERIENCE LEVEL RULES:
+- "beginner": Start with foundational concepts, clear prerequisites, and gentle learning curve.
+- "intermediate": Skip elementary basics; focus on practical patterns, architecture, and intermediate techniques.
+- "advanced": Deep-dive into internal mechanisms, performance optimization, edge cases, and advanced design principles.
+
+CURRICULUM QUALITY CONSTRAINTS:
+1. Aim for 4 to 8 modules total.
+2. Each module MUST contain between 3 to 6 lessons.
+3. Return ONLY valid raw JSON. Do NOT wrap output in \`\`\`json markdown blocks.
+4. All 'order' fields must start at 1 and increment sequentially.
+5. All time estimations (weeks, hours, minutes) must be positive integers matching the user's available daily time.`;
 
 export class GroqProvider implements AIProvider {
   name = 'groq' as const;
@@ -141,8 +153,7 @@ export class GroqProvider implements AIProvider {
   }
 
   async generateLearningPath(
-    prompt: string,
-    context?: { experienceLevel?: string; minutesPerDay?: number }
+    options: GenerateLearningPathOptions
   ): Promise<AILearningPathResponse> {
     const apiKey = process.env.GROQ_API_KEY;
 
@@ -159,20 +170,22 @@ export class GroqProvider implements AIProvider {
     try {
       const groq = new Groq({ apiKey });
 
-      const userPrompt = `Learning Goal: "${prompt}"
-Experience Level Preference: ${context?.experienceLevel || 'beginner'}
-Daily Study Time Available: ${context?.minutesPerDay || 30} minutes per day
+      const userPrompt = `Learning Topic: "${options.topic}"
+Experience Level: ${options.experienceLevel}
+Primary Goal: ${options.goal}
+Daily Study Commitment: ${options.minutesPerDay} minutes/day
+${options.targetDate ? `Target Completion Date: ${options.targetDate}` : ''}
 
-Synthesize a complete personalized learning path JSON object following the required schema.`;
+Synthesize a custom learning path JSON adhering to the specified schema.`;
 
       const response = await groq.chat.completions.create({
         model: GROQ_MODEL,
         messages: [
-          { role: 'system', content: SYSTEM_LEARNING_PATH_INSTRUCTION },
+          { role: 'system', content: SYSTEM_CURRICULUM_ARCHITECT_INSTRUCTION },
           { role: 'user', content: userPrompt },
         ],
-        temperature: 0.5,
-        max_tokens: 3072,
+        temperature: 0.4,
+        max_tokens: 3500,
         response_format: { type: 'json_object' },
       });
 
