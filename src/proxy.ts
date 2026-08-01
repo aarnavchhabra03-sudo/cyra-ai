@@ -42,6 +42,12 @@ export async function proxy(request: NextRequest) {
   const pathname = url.pathname;
 
   const isAuthPage = pathname === '/login' || pathname === '/signup';
+  const isApiRoute = pathname.startsWith('/api/');
+
+  // Allow API routes to be handled by their own handlers without HTML redirects
+  if (isApiRoute) {
+    return supabaseResponse;
+  }
 
   // If user is NOT logged in and trying to access a protected page
   if (!user && !isAuthPage) {
