@@ -3,6 +3,8 @@ import { createClient } from '@/lib/supabase/server';
 import { LearningPathGeneration } from '@/types/ai';
 
 export async function POST(request: Request) {
+  console.log('[save-learning-path] Starting persistence request...');
+
   // 1. Authenticate user using Supabase SSR client
   let user: any = null;
   let supabase: any = null;
@@ -12,6 +14,7 @@ export async function POST(request: Request) {
     const { data: { user: authUser }, error: authError } = await supabase.auth.getUser();
 
     if (authError || !authUser) {
+      console.warn('[save-learning-path] Authentication failed:', authError?.message || 'No user session');
       return NextResponse.json(
         {
           success: false,
@@ -22,7 +25,9 @@ export async function POST(request: Request) {
       );
     }
     user = authUser;
-  } catch (err) {
+    console.log(`[save-learning-path] Authenticated user ID: ${user.id}`);
+  } catch (err: any) {
+    console.error('[save-learning-path] Session verification error:', err?.message || err);
     return NextResponse.json(
       {
         success: false,
@@ -33,7 +38,7 @@ export async function POST(request: Request) {
     );
   }
 
-  // 2. Parse payload from request
+  // 2. Parse & Validate JSON Payload
   let body: any;
   try {
     body = await request.json();
@@ -50,7 +55,8 @@ export async function POST(request: Request) {
 
   const { curriculum, experienceLevel, goal, minutesPerDay } = body || {};
 
-  if (!curriculum || !curriculum.title || !Array.isArray(curriculum.modules)) {
+  if (!curriculum || !curriculum.title || !Array.isArray(curriculum.modules) || curriculum.modules.length === 0) {
+    console.warn('[save-learning-path] Invalid curriculum payload supplied');
     return NextResponse.json(
       {
         success: false,
@@ -62,14 +68,26 @@ export async function POST(request: Request) {
   }
 
   const pathCurriculum = curriculum as LearningPathGeneration;
+  console.log(`[save-learning-path] Curriculum title: "${pathCurriculum.title}" with ${pathCurriculum.modules.length} modules.`);
 
-  // 3. Step A: Insert Learning Path into Supabase (user_id strictly from server-side authenticated user)
+  // Helper cleanup function to prevent partial-save orphaned rows
+  const cleanupPartialSave = async (pathId: string) => {
+    console.warn(`[save-learning-path] Rolling back: deleting partially created learning_path ${pathId}...`);
+    try {
+      await supabase.from('learning_paths').delete().eq('id', pathId);
+      console.log(`[save-learning-path] Successfully rolled back learning_path ${pathId}.`);
+    } catch (cleanupErr) {
+      console.error('[save-learning-path] Rollback cleanup failed:', cleanupErr);
+    }
+  };
+
+  // 3. STEP A: Insert `learning_paths` record
   let learningPathId: string;
   try {
     const { data: pathRecord, error: pathError } = await supabase
       .from('learning_paths')
       .insert({
-        user_id: user.id, // Strictly enforced server-side
+        user_id: user.id, // Enforced server-side
         title: pathCurriculum.title,
         goal: goal || 'General Learning',
         experience_level: experienceLevel || 'beginner',
@@ -81,112 +99,121 @@ export async function POST(request: Request) {
       .single();
 
     if (pathError || !pathRecord) {
-      console.error('Error inserting learning_path record:', pathError);
+      console.error(`[save-learning-path] ERROR in learning_paths insert: ${pathError?.code || 'UNKNOWN'} - ${pathError?.message || 'No record returned'}`);
       return NextResponse.json(
         {
           success: false,
           error: 'Failed to create learning path in database.',
-          code: 'SAVE_FAILED',
+          code: 'PATH_SAVE_FAILED',
         },
         { status: 500 }
       );
     }
 
     learningPathId = pathRecord.id;
+    console.log(`[save-learning-path] Successfully created learning_paths row with ID: ${learningPathId}`);
   } catch (err: any) {
-    console.error('Learning path insertion exception:', err);
+    console.error('[save-learning-path] Exception during learning_paths insert:', err?.message || err);
     return NextResponse.json(
       {
         success: false,
         error: 'Database error creating learning path.',
-        code: 'SAVE_FAILED',
+        code: 'PATH_SAVE_FAILED',
       },
       { status: 500 }
     );
   }
 
-  // 4. Step B: Insert Modules for the created Learning Path
+  // 4. STEP B: Explicitly map & Insert `modules` records
   try {
     const modulesToInsert = pathCurriculum.modules.map((mod, index) => ({
       learning_path_id: learningPathId,
       title: mod.title,
-      description: mod.description,
+      description: mod.description || '',
       order_index: mod.order || index + 1,
       status: index === 0 ? 'in_progress' : 'locked',
       progress: 0,
     }));
 
+    console.log(`[save-learning-path] Inserting ${modulesToInsert.length} module records...`);
+
     const { data: insertedModules, error: modulesError } = await supabase
       .from('modules')
       .insert(modulesToInsert)
-      .select('id, order_index');
+      .select('id, order_index, title');
 
-    if (modulesError || !insertedModules || insertedModules.length === 0) {
-      console.error('Error inserting modules records:', modulesError);
+    if (modulesError || !insertedModules || insertedModules.length !== modulesToInsert.length) {
+      console.error(`[save-learning-path] ERROR in modules insert: ${modulesError?.code || 'COUNT_MISMATCH'} - ${modulesError?.message || 'Failed to insert all modules'}`);
+      await cleanupPartialSave(learningPathId);
       return NextResponse.json(
         {
           success: false,
-          error: 'Failed to create curriculum modules in database.',
-          code: 'SAVE_FAILED',
+          error: 'Failed to save curriculum modules.',
+          code: 'MODULE_SAVE_FAILED',
         },
         { status: 500 }
       );
     }
 
-    // Map inserted module IDs by order_index
-    const moduleMapByOrder = new Map<number, string>();
-    insertedModules.forEach((m: { id: string; order_index: number }) => {
-      moduleMapByOrder.set(m.order_index, m.id);
-    });
+    console.log(`[save-learning-path] Successfully inserted ${insertedModules.length} modules.`);
 
-    // 5. Step C: Insert Lessons for each Module
+    // 5. STEP C: Explicitly map & Insert `lessons` records for each module
     const lessonsToInsert: any[] = [];
 
     pathCurriculum.modules.forEach((mod) => {
-      const parentModuleId = moduleMapByOrder.get(mod.order);
-      if (parentModuleId && Array.isArray(mod.lessons)) {
+      const insertedMod = insertedModules.find((m: any) => m.order_index === mod.order);
+      if (insertedMod && Array.isArray(mod.lessons)) {
         mod.lessons.forEach((lesson, lIndex) => {
           lessonsToInsert.push({
-            module_id: parentModuleId,
+            module_id: insertedMod.id,
             title: lesson.title,
-            description: lesson.description,
+            description: lesson.description || '',
+            content: lesson.keyConcepts && lesson.keyConcepts.length > 0 ? `Key Concepts: ${lesson.keyConcepts.join(', ')}` : '',
             estimated_minutes: lesson.estimatedMinutes || 15,
             order_index: lesson.order || lIndex + 1,
-            status: mod.order === 1 && lIndex === 0 ? 'in_progress' : 'locked',
+            status: mod.order === 1 && (lesson.order === 1 || lIndex === 0) ? 'in_progress' : 'locked',
           });
         });
       }
     });
 
-    if (lessonsToInsert.length > 0) {
-      const { error: lessonsError } = await supabase
-        .from('lessons')
-        .insert(lessonsToInsert);
+    console.log(`[save-learning-path] Inserting ${lessonsToInsert.length} lesson records...`);
 
-      if (lessonsError) {
-        console.error('Error inserting lessons records:', lessonsError);
+    if (lessonsToInsert.length > 0) {
+      const { data: insertedLessons, error: lessonsError } = await supabase
+        .from('lessons')
+        .insert(lessonsToInsert)
+        .select('id');
+
+      if (lessonsError || !insertedLessons || insertedLessons.length !== lessonsToInsert.length) {
+        console.error(`[save-learning-path] ERROR in lessons insert: ${lessonsError?.code || 'COUNT_MISMATCH'} - ${lessonsError?.message || 'Failed to insert all lessons'}`);
+        await cleanupPartialSave(learningPathId);
         return NextResponse.json(
           {
             success: false,
             error: 'Failed to save curriculum lessons.',
-            code: 'SAVE_FAILED',
+            code: 'LESSON_SAVE_FAILED',
           },
           { status: 500 }
         );
       }
+
+      console.log(`[save-learning-path] Successfully inserted ${insertedLessons.length} lessons.`);
     }
 
-    // 6. Return Success Response with created learningPathId
+    // 6. Complete Success Verification
+    console.log(`[save-learning-path] SUCCESS: Entire curriculum persisted (1 path, ${insertedModules.length} modules, ${lessonsToInsert.length} lessons).`);
     return NextResponse.json({
       success: true,
       learningPathId,
     });
   } catch (err: any) {
-    console.error('Error saving curriculum modules/lessons:', err);
+    console.error('[save-learning-path] Unexpected exception during module/lesson insert:', err?.message || err);
+    await cleanupPartialSave(learningPathId);
     return NextResponse.json(
       {
         success: false,
-        error: 'An unexpected database error occurred while saving modules.',
+        error: 'An unexpected database error occurred during save.',
         code: 'SAVE_FAILED',
       },
       { status: 500 }
