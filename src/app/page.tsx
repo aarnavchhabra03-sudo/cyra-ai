@@ -7,7 +7,7 @@ import {
   Clock, Award, BookOpen, ArrowUpRight,
   Sparkles, Zap, ChevronRight, Compass,
   ChevronDown, ChevronUp, Calendar, AlertTriangle,
-  RefreshCw, X, Layers, Check
+  RefreshCw, X, Layers, Check, Loader2
 } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { Profile, LearningPath, DailyTaskRecord } from '@/types/database';
@@ -50,6 +50,7 @@ export default function Dashboard() {
 
   // AI Generation & Preview States
   const [generating, setGenerating] = useState(false);
+  const [savingPath, setSavingPath] = useState(false);
   const [loadingStepIndex, setLoadingStepIndex] = useState(0);
   const [generationError, setGenerationError] = useState<{ message: string; code?: string } | null>(null);
   const [previewData, setPreviewData] = useState<LearningPathGeneration | null>(null);
@@ -168,7 +169,7 @@ export default function Dashboard() {
   /* Call POST /api/ai/generate-learning-path */
   const handleGenerate = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!query.trim() || generating) return;
+    if (!query.trim() || generating || savingPath) return;
 
     setGenerating(true);
     setGenerationError(null);
@@ -226,6 +227,56 @@ export default function Dashboard() {
       });
     } finally {
       setGenerating(false);
+    }
+  };
+
+  /* Persist previewed curriculum to Supabase */
+  const handleSaveLearningPath = async () => {
+    if (!previewData || savingPath) return;
+
+    setSavingPath(true);
+    setGenerationError(null);
+
+    try {
+      const response = await fetch('/api/ai/save-learning-path', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          curriculum: previewData,
+          experienceLevel,
+          goal,
+          minutesPerDay,
+          targetDate: targetDate || undefined,
+        }),
+      });
+
+      const resData = await response.json();
+
+      if (!response.ok || !resData.success) {
+        if (response.status === 401 || resData.code === 'AUTH_REQUIRED') {
+          setGenerationError({
+            message: 'You must be signed in to create and save a learning path.',
+            code: 'AUTH_REQUIRED',
+          });
+        } else {
+          setGenerationError({
+            message: resData.error || 'Failed to persist learning path to your profile. Please try again.',
+            code: resData.code || 'SAVE_FAILED',
+          });
+        }
+        setSavingPath(false);
+        return;
+      }
+
+      // Successfully saved! Redirect to /learn/[learningPathId]
+      router.push(`/learn/${resData.learningPathId}`);
+    } catch (err: any) {
+      console.error('Error saving learning path:', err);
+      setGenerationError({
+        message: 'Network failure while saving learning path. Please check your connection and retry.',
+        code: 'NETWORK_ERROR',
+      });
+      setSavingPath(false);
     }
   };
 
@@ -320,7 +371,7 @@ export default function Dashboard() {
               <AlertTriangle className="w-6 h-6" />
             </div>
 
-            <h3 className="text-center text-base font-bold text-white mb-2">Generation Failed</h3>
+            <h3 className="text-center text-base font-bold text-white mb-2">Action Failed</h3>
             <p className="text-center text-xs text-zinc-300 leading-relaxed mb-6">
               {generationError.message}
             </p>
@@ -335,11 +386,17 @@ export default function Dashboard() {
                 </button>
               ) : (
                 <button
-                  onClick={() => handleGenerate()}
+                  onClick={() => {
+                    if (previewData) {
+                      handleSaveLearningPath();
+                    } else {
+                      handleGenerate();
+                    }
+                  }}
                   className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-500 transition-colors"
                 >
                   <RefreshCw className="w-3.5 h-3.5" />
-                  <span>Retry Generation</span>
+                  <span>Retry Action</span>
                 </button>
               )}
 
@@ -354,7 +411,7 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* ══ 3. Temporary Learning Path Preview Modal ═══════════════════ */}
+      {/* ══ 3. Learning Path Preview Modal ═══════════════════ */}
       {previewData && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center p-4 md:p-6 overflow-y-auto animate-fade-in"
@@ -383,8 +440,9 @@ export default function Dashboard() {
               </div>
 
               <button
+                disabled={savingPath}
                 onClick={() => setPreviewData(null)}
-                className="p-2 rounded-xl text-zinc-400 hover:text-white bg-zinc-800/80 hover:bg-zinc-700/80 transition-colors flex-shrink-0"
+                className="p-2 rounded-xl text-zinc-400 hover:text-white bg-zinc-800/80 hover:bg-zinc-700/80 transition-colors flex-shrink-0 disabled:opacity-50"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -559,19 +617,25 @@ export default function Dashboard() {
 
               <div className="flex items-center gap-3">
                 <button
+                  disabled={savingPath}
                   onClick={() => setPreviewData(null)}
-                  className="px-4 py-2.5 rounded-xl text-xs font-semibold text-zinc-400 hover:text-white bg-zinc-800 hover:bg-zinc-700 transition-colors"
+                  className="px-4 py-2.5 rounded-xl text-xs font-semibold text-zinc-400 hover:text-white bg-zinc-800 hover:bg-zinc-700 transition-colors disabled:opacity-50"
                 >
                   Close Preview
                 </button>
                 <button
-                  onClick={() => {
-                    // For this checkpoint, show acknowledgment and redirect to course workspace
-                    router.push('/course/operating-systems');
-                  }}
-                  className="px-6 py-2.5 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-indigo-600 via-purple-600 to-cyan-500 hover:opacity-90 transition-opacity shadow-lg shadow-indigo-500/20"
+                  disabled={savingPath}
+                  onClick={handleSaveLearningPath}
+                  className="px-6 py-2.5 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-indigo-600 via-purple-600 to-cyan-500 hover:opacity-90 transition-opacity shadow-lg shadow-indigo-500/20 flex items-center gap-2 disabled:opacity-50 disabled:pointer-events-none"
                 >
-                  Create This Learning Path
+                  {savingPath ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Creating your workspace...</span>
+                    </>
+                  ) : (
+                    <span>Create This Learning Path</span>
+                  )}
                 </button>
               </div>
             </div>
@@ -622,7 +686,7 @@ export default function Dashboard() {
               <input
                 ref={inputRef}
                 type="text"
-                disabled={generating}
+                disabled={generating || savingPath}
                 placeholder="e.g., Learn Operating Systems, Master Machine Learning..."
                 value={query}
                 onChange={e => setQuery(e.target.value)}
@@ -634,7 +698,7 @@ export default function Dashboard() {
               />
               <button
                 type="submit"
-                disabled={!query.trim() || generating}
+                disabled={!query.trim() || generating || savingPath}
                 className="flex-shrink-0 flex items-center gap-2 px-6 py-3 rounded-2xl text-xs font-bold tracking-wide text-white uppercase transition-all duration-200 disabled:opacity-35 disabled:pointer-events-none"
                 style={{
                   background: 'linear-gradient(135deg, var(--primary) 0%, #7c3aed 50%, var(--cyan) 100%)',
@@ -651,7 +715,7 @@ export default function Dashboard() {
               {/* Experience Level Selector */}
               <div className="relative">
                 <select
-                  disabled={generating}
+                  disabled={generating || savingPath}
                   value={experienceLevel}
                   onChange={(e) => setExperienceLevel(e.target.value as DifficultyLevel)}
                   className="appearance-none bg-zinc-900/90 hover:bg-zinc-800/90 text-zinc-300 hover:text-white border border-zinc-800/80 rounded-xl text-[11px] font-semibold px-3 py-1.5 pr-7 focus:outline-none focus:border-indigo-500/50 cursor-pointer transition-colors disabled:opacity-50"
@@ -666,7 +730,7 @@ export default function Dashboard() {
               {/* Goal Selector */}
               <div className="relative">
                 <select
-                  disabled={generating}
+                  disabled={generating || savingPath}
                   value={goal}
                   onChange={(e) => setGoal(e.target.value)}
                   className="appearance-none bg-zinc-900/90 hover:bg-zinc-800/90 text-zinc-300 hover:text-white border border-zinc-800/80 rounded-xl text-[11px] font-semibold px-3 py-1.5 pr-7 focus:outline-none focus:border-indigo-500/50 cursor-pointer transition-colors disabled:opacity-50"
@@ -683,7 +747,7 @@ export default function Dashboard() {
               {/* Daily Study Time Selector */}
               <div className="relative">
                 <select
-                  disabled={generating}
+                  disabled={generating || savingPath}
                   value={minutesPerDay}
                   onChange={(e) => setMinutesPerDay(Number(e.target.value))}
                   className="appearance-none bg-zinc-900/90 hover:bg-zinc-800/90 text-zinc-300 hover:text-white border border-zinc-800/80 rounded-xl text-[11px] font-semibold px-3 py-1.5 pr-7 focus:outline-none focus:border-indigo-500/50 cursor-pointer transition-colors disabled:opacity-50"
@@ -702,7 +766,7 @@ export default function Dashboard() {
                 <Calendar className="w-3 h-3 text-zinc-400 absolute left-2.5 pointer-events-none" />
                 <input
                   type="date"
-                  disabled={generating}
+                  disabled={generating || savingPath}
                   value={targetDate}
                   onChange={(e) => setTargetDate(e.target.value)}
                   placeholder="Target date"
@@ -717,7 +781,7 @@ export default function Dashboard() {
             {PROMPTS.map(p => (
               <button
                 key={p}
-                disabled={generating}
+                disabled={generating || savingPath}
                 className="prompt-pill disabled:opacity-50"
                 onClick={() => { setQuery(p); inputRef.current?.focus(); }}
               >
@@ -759,7 +823,7 @@ export default function Dashboard() {
               ) : (
                 /* Active Course Card */
                 <div
-                  onClick={() => router.push('/course/operating-systems')}
+                  onClick={() => router.push(`/learn/${learningPaths[0].id}`)}
                   className="glass-card p-6 cursor-pointer group relative overflow-hidden"
                 >
                   <div
