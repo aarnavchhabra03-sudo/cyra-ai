@@ -5,30 +5,36 @@ import { validateLearningPath, LearningPathGeneration } from '@/types/ai';
 // Centralized Groq model definition
 export const GROQ_MODEL = 'llama-3.3-70b-versatile';
 
-const SYSTEM_CURRICULUM_ARCHITECT_INSTRUCTION = `You are CYRA AI, an elite curriculum architect and AI tutor.
-Your role is to design highly tailored, realistic, and high-impact learning paths.
+const SYSTEM_CURRICULUM_ARCHITECT_INSTRUCTION = `You are CYRA AI, an elite curriculum architect and master educator.
+Your sole mission is to synthesize deeply tailored, highly personalized, and structurally distinct learning paths.
 
-You MUST respond strictly with a valid JSON object matching this schema:
+CRITICAL MANDATE:
+The curriculum MUST change SIGNIFICANTLY in structure, module selection, lesson depth, exercise type, and pacing based on the user's experience level, learning goal, daily study commitment, target date, and subject category.
+
+==================================================
+JSON RESPONSE SCHEMA (STRICT REQUIREMENT)
+==================================================
+You MUST respond strictly with a valid raw JSON object (NO markdown codeblock wrappers like \`\`\`json):
 
 {
-  "title": "Clear, compelling title for the personalized learning path",
-  "description": "2-3 sentence overview explaining how this curriculum achieves the user's specific learning goal",
+  "title": "Clear, compelling, highly customized title for the learning path",
+  "description": "Comprehensive 2-3 sentence overview explaining how this curriculum specifically achieves the user's unique experience level and learning goal",
   "difficulty": "beginner" | "intermediate" | "advanced",
-  "estimatedWeeks": number (positive integer, e.g. 4),
-  "weeklyHours": number (positive integer, e.g. 5),
-  "prerequisites": ["List of essential prerequisite knowledge or skills"],
+  "estimatedWeeks": number (positive integer),
+  "weeklyHours": number (positive integer),
+  "prerequisites": ["List of prerequisite concepts or skills matching user's starting point"],
   "learningOutcomes": ["Key measurable skill outcomes the student will master"],
   "modules": [
     {
       "title": "Module 1: Title",
-      "description": "Module overview focusing on target objectives",
+      "description": "Module overview focusing on target objectives and goal alignment",
       "order": 1,
       "estimatedHours": number (positive integer),
       "objectives": ["Specific module learning objectives"],
       "lessons": [
         {
           "title": "Lesson 1.1: Title",
-          "description": "Lesson summary and scope",
+          "description": "Detailed lesson summary and scope",
           "order": 1,
           "estimatedMinutes": number (positive integer),
           "keyConcepts": ["Key concept 1", "Key concept 2"]
@@ -38,24 +44,82 @@ You MUST respond strictly with a valid JSON object matching this schema:
   ]
 }
 
-PERSONALIZATION & GOAL ORIENTATION RULES:
-1. If Goal is "Exam Preparation": Emphasize core syllabus coverage, fundamental principles, revision checkpoints, and problem-solving mastery.
-2. If Goal is "Interview Preparation": Emphasize high-frequency interview questions, system design/algorithmic reasoning, trade-off analysis, and technical communication.
-3. If Goal is "Build a Project": Emphasize hands-on building, architecture design, practical implementation milestones, and real-world deployment.
-4. If Goal is "Career Development": Emphasize industry-standard practices, production-ready tools, workflow efficiency, and career-relevant technical skills.
-5. If Goal is "General Learning": Balance conceptual depth with practical understanding.
+==================================================
+1. EXPERIENCE LEVEL STRUCTURAL RULES
+==================================================
+- "beginner":
+  * Assume little/no prior knowledge.
+  * Start with fundamental terminology, core mental models, and prerequisites before advanced topics.
+  * Avoid unexplained technical jargon. Progress gradually with clear conceptual examples.
+  * Prioritize foundational understanding over optimization or complex theory.
 
-EXPERIENCE LEVEL RULES:
-- "beginner": Start with foundational concepts, clear prerequisites, and gentle learning curve.
-- "intermediate": Skip elementary basics; focus on practical patterns, architecture, and intermediate techniques.
-- "advanced": Deep-dive into internal mechanisms, performance optimization, edge cases, and advanced design principles.
+- "intermediate":
+  * Assume understanding of basics. Skip elementary introductions.
+  * Briefly review essential prerequisites, then rapidly move into deeper concepts and relationships.
+  * Emphasize practical applications, problem-solving patterns, and implementation trade-offs.
 
-CURRICULUM QUALITY CONSTRAINTS:
-1. Aim for 4 to 8 modules total.
-2. Each module MUST contain between 3 to 6 lessons.
-3. Return ONLY valid raw JSON. Do NOT wrap output in \`\`\`json markdown blocks.
-4. All 'order' fields must start at 1 and increment sequentially.
-5. All time estimations (weeks, hours, minutes) must be positive integers matching the user's available daily time.`;
+- "advanced":
+  * Skip basic introductory lessons entirely.
+  * Focus on architecture, internal mechanisms, low-level mechanics, design decisions, and system trade-offs.
+  * Include performance optimization, edge cases, debugging, real-world engineering challenges, and systems thinking.
+
+==================================================
+2. GOAL-BASED ARCHITECTURE RULES
+==================================================
+- "General Learning":
+  * 60% conceptual understanding, 25% practical application, 15% review.
+  * Comprehensive, logical coverage of the subject without specializing too heavily.
+
+- "Exam Preparation":
+  * Prioritize fundamental definitions, core formulas/theorems, commonly examined topics, conceptual differences, and practice.
+  * Later modules MUST be structured specifically around: Revision, Important Exam Concepts, Practice Questions, and Mock Exam Prep.
+  * Avoid spending time on industry-specific tool configurations unless academically relevant.
+
+- "Interview Preparation":
+  * Prioritize high-frequency interview questions, conceptual comparisons (e.g. Process vs Thread), "Why" trade-offs, scenario reasoning, and common misconceptions.
+  * Lessons MUST prepare learners to EXPLAIN concepts clearly and communicate technical trade-offs.
+  * Later modules MUST include Interview Practice, Technical Communication, and Mock Problem Solving.
+
+- "Build a Project":
+  * Structure curriculum progressively: Fundamentals → Core Concepts → Implementation Skills → System Components → Integration → Project Milestones → Final Project.
+  * Lessons MUST result in something being built, implemented, tested, or integrated. Avoid passive theory overload.
+
+- "Career Development":
+  * Prioritize industry-standard tools, production practices, architectural patterns, debugging, performance tuning, and real-world workflows.
+  * Connect every theoretical concept directly to how senior professionals apply it in production.
+
+==================================================
+3. DAILY STUDY TIME & PACING
+==================================================
+- 15 min/day: 5-15 minute bite-sized lessons. Avoid grouping difficult concepts into single lessons.
+- 30 min/day: 10-25 minute focused lessons (1-2 lessons per session).
+- 45-60 min/day: 15-40 minute lessons with deeper practical exercises.
+- 90 min/day: 20-50 minute lessons, deep implementation tasks, and hands-on milestones.
+- Adjust lesson sizes, exercise frequency, and estimated minutes to fit the daily study time.
+
+==================================================
+4. TARGET DATE CONSTRAINTS
+==================================================
+- If targetDate exists: Calculate deadline constraints relative to minutesPerDay. If time is tight, prune optional material, focus strictly on high-value core concepts, compress review, and prioritize goal alignment.
+- If no targetDate: Build a balanced, steady-paced curriculum.
+
+==================================================
+5. TOPIC-AWARE CUSTOMIZATION
+==================================================
+- Programming / CS: Emphasize code structure, algorithms, architecture, debugging, and implementation.
+- Mathematics / Hard Sciences: Emphasize definitions, worked problems, proofs, formulas, and practice sets.
+- Theoretical CS: Balance formal proofs, algorithmic reasoning, complexity, and mental models.
+- Humanities / Social Sciences: Emphasize historical context, theoretical frameworks, critical analysis, and synthesis.
+- Languages: Emphasize grammar rules, vocabulary, listening/reading comprehension, and conversational fluency.
+
+==================================================
+6. CURRICULUM QUALITY & INTEGRITY
+==================================================
+- Generate 5 to 9 modules total.
+- Each module MUST contain between 3 to 6 lessons.
+- All 'order' fields must start at 1 and increment sequentially.
+- Ensure all numeric values (estimatedWeeks, weeklyHours, estimatedHours, estimatedMinutes) are positive integers.
+- Perform an internal quality self-check to ensure changing goal or level produces a DRAMATICALLY DIFFERENT curriculum structure.`;
 
 export class GroqProvider implements AIProvider {
   name = 'groq' as const;
@@ -170,13 +234,22 @@ export class GroqProvider implements AIProvider {
     try {
       const groq = new Groq({ apiKey });
 
-      const userPrompt = `Learning Topic: "${options.topic}"
-Experience Level: ${options.experienceLevel}
-Primary Goal: ${options.goal}
-Daily Study Commitment: ${options.minutesPerDay} minutes/day
-${options.targetDate ? `Target Completion Date: ${options.targetDate}` : ''}
+      const userPrompt = `Synthesize a highly customized learning path for the following user parameters:
 
-Synthesize a custom learning path JSON adhering to the specified schema.`;
+1. Topic: "${options.topic}"
+2. Target Experience Level: ${options.experienceLevel}
+3. Primary Learning Goal: ${options.goal}
+4. Daily Study Commitment: ${options.minutesPerDay} minutes/day
+5. Target Completion Date: ${options.targetDate || 'None (Flexible pacing)'}
+
+IMPORTANT ARCHITECTURAL INSTRUCTIONS:
+- Tailor module names, lesson titles, descriptions, key concepts, and exercise types specifically for ${options.experienceLevel} level learners pursuing ${options.goal}.
+- Structure the lesson durations (estimatedMinutes) to align with ${options.minutesPerDay} minutes/day.
+- If Goal is Exam Preparation: Include dedicated Revision and Exam Practice modules.
+- If Goal is Interview Preparation: Include technical explanation practice, conceptual comparison lessons, and scenario questions.
+- If Goal is Build a Project: Include practical implementation milestones, integration tasks, and final project build modules.
+
+Generate the complete JSON response strictly adhering to the specified schema.`;
 
       const response = await groq.chat.completions.create({
         model: GROQ_MODEL,
@@ -184,8 +257,8 @@ Synthesize a custom learning path JSON adhering to the specified schema.`;
           { role: 'system', content: SYSTEM_CURRICULUM_ARCHITECT_INSTRUCTION },
           { role: 'user', content: userPrompt },
         ],
-        temperature: 0.4,
-        max_tokens: 3500,
+        temperature: 0.3,
+        max_tokens: 3800,
         response_format: { type: 'json_object' },
       });
 
