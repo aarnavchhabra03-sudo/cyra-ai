@@ -124,7 +124,7 @@ export async function POST(request: Request) {
     );
   }
 
-  // 4. STEP B: Explicitly map & Insert `modules` records (using real column name module_order)
+  // 4. STEP B: Explicitly map & Insert `modules` records (using real column names)
   try {
     const modulesToInsert = pathCurriculum.modules.map((mod, index) => ({
       learning_path_id: learningPathId,
@@ -132,7 +132,6 @@ export async function POST(request: Request) {
       description: mod.description || '',
       module_order: mod.order || index + 1,
       status: index === 0 ? 'in_progress' : 'locked',
-      progress: 0,
     }));
 
     console.log(`[save-learning-path] Inserting ${modulesToInsert.length} module records...`);
@@ -157,7 +156,7 @@ export async function POST(request: Request) {
 
     console.log(`[save-learning-path] Successfully inserted ${insertedModules.length} modules.`);
 
-    // 5. STEP C: Explicitly map & Insert `lessons` records for each module (using real column name lesson_order)
+    // 5. STEP C: Explicitly map & Insert `lessons` records for each module
     const lessonsToInsert: any[] = [];
 
     pathCurriculum.modules.forEach((mod) => {
