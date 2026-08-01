@@ -6,20 +6,23 @@ import {
   ArrowRight, Flame, CheckCircle2, Circle,
   Clock, Award, BookOpen, ArrowUpRight,
   Sparkles, Zap, ChevronRight, Compass,
-  ChevronDown, Calendar
+  ChevronDown, ChevronUp, Calendar, AlertTriangle,
+  RefreshCw, X, Layers, Check
 } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { Profile, LearningPath, DailyTaskRecord } from '@/types/database';
-import { DifficultyLevel } from '@/types/ai';
+import { DifficultyLevel, LearningPathGeneration } from '@/types/ai';
 import { mockDailyTasks, mockCourses } from '@/data/mockData';
 
-/* ── Generation step labels ─────────────────────── */
-const GEN_STEPS = [
-  'Mapping knowledge graph…',
-  'Structuring learning roadmap…',
-  'Curating reference material…',
-  'Building module nodes & quizzes…',
-  'Calibrating AI tutor context…',
+/* ── Generation loading steps ─────────────────────── */
+const LOADING_STEPS = [
+  'Understanding your goal...',
+  'Assessing your current level...',
+  'Identifying prerequisites...',
+  'Designing your curriculum...',
+  'Optimizing your study schedule...',
+  'Building your roadmap...',
+  'Preparing your CYRA workspace...',
 ];
 
 /* ── Prompt suggestions ─────────────────────────── */
@@ -37,9 +40,6 @@ export default function Dashboard() {
   const inputRef = useRef<HTMLInputElement>(null);
 
   const [query, setQuery] = useState('');
-  const [generating, setGenerating] = useState(false);
-  const [step, setStep] = useState(0);
-  const [progress, setProgress] = useState(0);
   const [inputFocused, setInputFocused] = useState(false);
 
   // Personalization States
@@ -47,6 +47,13 @@ export default function Dashboard() {
   const [goal, setGoal] = useState<string>('General Learning');
   const [minutesPerDay, setMinutesPerDay] = useState<number>(30);
   const [targetDate, setTargetDate] = useState<string>('');
+
+  // AI Generation & Preview States
+  const [generating, setGenerating] = useState(false);
+  const [loadingStepIndex, setLoadingStepIndex] = useState(0);
+  const [generationError, setGenerationError] = useState<{ message: string; code?: string } | null>(null);
+  const [previewData, setPreviewData] = useState<LearningPathGeneration | null>(null);
+  const [expandedModules, setExpandedModules] = useState<Record<number, boolean>>({ 1: true });
 
   // Supabase Data States
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -158,38 +165,75 @@ export default function Dashboard() {
     }
   };
 
-  /* Create Learning Path Simulation */
-  const handleGenerate = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!query.trim()) return;
-
-    // Collect frontend state
-    const payload = {
-      topic: query.trim(),
-      experienceLevel,
-      goal,
-      minutesPerDay,
-      targetDate: targetDate || undefined,
-    };
-
-    console.log('Collected Learning Path Input:', payload);
+  /* Call POST /api/ai/generate-learning-path */
+  const handleGenerate = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!query.trim() || generating) return;
 
     setGenerating(true);
-    setStep(0);
-    setProgress(0);
+    setGenerationError(null);
+    setPreviewData(null);
+    setLoadingStepIndex(0);
 
-    // Step simulation
-    GEN_STEPS.forEach((_, i) => {
-      setTimeout(() => {
-        setStep(i);
-        setProgress(Math.round(((i + 1) / GEN_STEPS.length) * 100));
-        if (i === GEN_STEPS.length - 1) {
-          setTimeout(() => {
-            router.push('/course/operating-systems');
-          }, 350);
+    // Smoothly cycle loading messages
+    const stepInterval = setInterval(() => {
+      setLoadingStepIndex((prev) => (prev < LOADING_STEPS.length - 1 ? prev + 1 : prev));
+    }, 2000);
+
+    try {
+      const response = await fetch('/api/ai/generate-learning-path', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          topic: query.trim(),
+          experienceLevel,
+          goal,
+          minutesPerDay,
+          targetDate: targetDate || undefined,
+        }),
+      });
+
+      const resData = await response.json();
+      clearInterval(stepInterval);
+
+      if (!response.ok || !resData.success) {
+        if (response.status === 401 || resData.code === 'AUTH_REQUIRED') {
+          setGenerationError({
+            message: 'You must be signed in to generate a learning path.',
+            code: 'AUTH_REQUIRED',
+          });
+        } else if (response.status === 429 || resData.code === 'AI_RATE_LIMIT') {
+          setGenerationError({
+            message: 'AI service rate limit reached. Please wait a moment and try again.',
+            code: 'AI_RATE_LIMIT',
+          });
+        } else {
+          setGenerationError({
+            message: resData.error || 'Unable to synthesize learning path. Please try again.',
+            code: resData.code || 'AI_GENERATION_FAILED',
+          });
         }
-      }, 480 * (i + 1));
-    });
+      } else {
+        // Success: preview generated curriculum
+        setPreviewData(resData.data);
+        setExpandedModules({ 1: true });
+      }
+    } catch (err: any) {
+      clearInterval(stepInterval);
+      setGenerationError({
+        message: 'Network error communicating with CYRA AI server. Please check your connection.',
+        code: 'NETWORK_ERROR',
+      });
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const toggleModuleExpand = (moduleOrder: number) => {
+    setExpandedModules(prev => ({
+      ...prev,
+      [moduleOrder]: !prev[moduleOrder],
+    }));
   };
 
   const userFirstName = profile?.full_name?.split(' ')[0] || 'Learner';
@@ -213,66 +257,324 @@ export default function Dashboard() {
 
   return (
     <>
-      {/* ══ Generation overlay ══════════════════════════════════════════ */}
+      {/* ══ 1. Loading Overlay (No Fake Percentages) ════════════════════ */}
       {generating && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center p-4 animate-fade-in"
-          style={{ background: 'rgba(7,7,10,0.88)', backdropFilter: 'blur(20px)' }}
+          style={{ background: 'rgba(7,7,10,0.88)', backdropFilter: 'blur(24px)' }}
         >
           <div
-            className="w-full max-w-sm animate-scale-in"
-            style={{ background: 'var(--bg-elevated)', border: '1px solid rgba(99,102,241,0.25)', borderRadius: 20, padding: 32 }}
+            className="w-full max-w-md text-center animate-scale-in"
+            style={{ background: 'var(--bg-elevated)', border: '1px solid rgba(99,102,241,0.25)', borderRadius: 24, padding: 36 }}
           >
+            {/* Spinning & Pulsing AI Icon */}
             <div className="flex justify-center mb-6">
-              <div className="relative w-14 h-14 flex items-center justify-center">
+              <div className="relative w-16 h-16 flex items-center justify-center">
                 <div
                   className="absolute inset-0 rounded-full animate-spin-slow"
                   style={{ background: 'conic-gradient(from 0deg, transparent 0%, var(--primary) 60%, var(--cyan) 100%)', padding: 2 }}
                 >
                   <div className="w-full h-full rounded-full" style={{ background: 'var(--bg-elevated)' }} />
                 </div>
-                <Zap className="w-5 h-5 relative z-10 text-cyan-400" />
+                <Zap className="w-6 h-6 relative z-10 text-cyan-400 animate-pulse" />
               </div>
             </div>
 
-            <h3 className="text-center text-base font-bold text-white mb-1">Building your workspace</h3>
-            <p className="text-center text-xs mb-6" style={{ color: 'var(--text-muted)' }}>
+            <h3 className="text-lg font-bold text-white mb-1">Synthesizing Learning Path</h3>
+            <p className="text-xs text-indigo-300 font-medium mb-6 line-clamp-1">
               "{query}"
             </p>
 
-            <div className="space-y-2 mb-5">
-              {GEN_STEPS.map((label, i) => {
-                const done = i < step;
-                const current = i === step;
-                return (
-                  <div
-                    key={i}
-                    className="flex items-center gap-2.5 text-[11px]"
-                    style={{ color: done ? 'var(--emerald)' : current ? '#fff' : 'var(--text-muted)' }}
-                  >
-                    <span
-                      className="w-3.5 h-3.5 flex-shrink-0 flex items-center justify-center rounded-full text-[8px] font-bold"
-                      style={{
-                        background: done ? 'rgba(52,211,153,0.15)' : current ? 'rgba(99,102,241,0.2)' : 'rgba(255,255,255,0.04)',
-                        border: `1px solid ${done ? 'rgba(52,211,153,0.4)' : current ? 'rgba(99,102,241,0.4)' : 'rgba(255,255,255,0.06)'}`,
-                      }}
-                    >
-                      {done ? '✓' : i + 1}
-                    </span>
-                    {label}
-                    {current && <span className="ml-auto inline-block w-1 h-1 rounded-full bg-indigo-400 animate-pulse" />}
-                  </div>
-                );
-              })}
+            {/* Cycling Loading Step Indicator */}
+            <div
+              className="p-4 rounded-xl mb-4 border transition-all duration-500"
+              style={{ background: 'rgba(99,102,241,0.06)', border: '1px solid rgba(99,102,241,0.2)' }}
+            >
+              <div className="flex items-center justify-center gap-2 text-xs font-semibold text-white">
+                <Sparkles className="w-3.5 h-3.5 text-cyan-400 animate-spin" />
+                <span>{LOADING_STEPS[loadingStepIndex]}</span>
+              </div>
+              <p className="text-[10px] text-zinc-400 mt-1.5">
+                Step {loadingStepIndex + 1} of {LOADING_STEPS.length}
+              </p>
             </div>
 
-            <div className="h-[3px] w-full rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.06)' }}>
-              <div
-                className="h-full rounded-full transition-all duration-500"
-                style={{ width: `${progress}%`, background: 'linear-gradient(90deg, var(--primary), var(--cyan))' }}
-              />
+            <p className="text-[11px] text-zinc-500">
+              CYRA's AI curriculum architect is tailoring modules & lessons for you.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* ══ 2. Error Modal Overlay ══════════════════════════════════════ */}
+      {generationError && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 animate-fade-in"
+          style={{ background: 'rgba(7,7,10,0.85)', backdropFilter: 'blur(20px)' }}
+        >
+          <div
+            className="w-full max-w-md animate-scale-in"
+            style={{ background: 'var(--bg-elevated)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 24, padding: 32 }}
+          >
+            <div className="w-12 h-12 rounded-2xl bg-red-500/10 border border-red-500/20 flex items-center justify-center mx-auto text-red-400 mb-4">
+              <AlertTriangle className="w-6 h-6" />
             </div>
-            <p className="text-right text-[9px] font-mono mt-1.5" style={{ color: 'var(--text-muted)' }}>{progress}%</p>
+
+            <h3 className="text-center text-base font-bold text-white mb-2">Generation Failed</h3>
+            <p className="text-center text-xs text-zinc-300 leading-relaxed mb-6">
+              {generationError.message}
+            </p>
+
+            <div className="flex items-center gap-3">
+              {generationError.code === 'AUTH_REQUIRED' ? (
+                <button
+                  onClick={() => router.push('/login')}
+                  className="flex-1 py-2.5 rounded-xl text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-500 transition-colors"
+                >
+                  Sign In to CYRA
+                </button>
+              ) : (
+                <button
+                  onClick={() => handleGenerate()}
+                  className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-500 transition-colors"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>Retry Generation</span>
+                </button>
+              )}
+
+              <button
+                onClick={() => setGenerationError(null)}
+                className="px-4 py-2.5 rounded-xl text-xs font-semibold text-zinc-400 hover:text-white bg-zinc-800/80 hover:bg-zinc-700/80 transition-colors"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ══ 3. Temporary Learning Path Preview Modal ═══════════════════ */}
+      {previewData && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 md:p-6 overflow-y-auto animate-fade-in"
+          style={{ background: 'rgba(7,7,10,0.92)', backdropFilter: 'blur(24px)' }}
+        >
+          <div
+            className="w-full max-w-3xl my-auto animate-scale-in flex flex-col max-h-[90vh] overflow-hidden"
+            style={{ background: 'var(--bg-elevated)', border: '1px solid rgba(99,102,241,0.3)', borderRadius: 24 }}
+          >
+            {/* Modal Header */}
+            <div className="p-6 md:p-8 border-b border-zinc-800 flex items-start justify-between gap-4">
+              <div>
+                <div className="flex flex-wrap items-center gap-2 mb-2">
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+                    {previewData.difficulty}
+                  </span>
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold tracking-wider bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
+                    {previewData.estimatedWeeks} Weeks ({previewData.weeklyHours} hrs/wk)
+                  </span>
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold tracking-wider bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                    {previewData.modules.length} Modules
+                  </span>
+                </div>
+                <h2 className="text-2xl font-extrabold text-white leading-tight">{previewData.title}</h2>
+                <p className="text-xs text-zinc-400 mt-1.5 leading-relaxed">{previewData.description}</p>
+              </div>
+
+              <button
+                onClick={() => setPreviewData(null)}
+                className="p-2 rounded-xl text-zinc-400 hover:text-white bg-zinc-800/80 hover:bg-zinc-700/80 transition-colors flex-shrink-0"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Modal Scrollable Content */}
+            <div className="p-6 md:p-8 overflow-y-auto space-y-6 flex-1">
+
+              {/* Prerequisites & Outcomes Grid */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Prerequisites */}
+                {previewData.prerequisites && previewData.prerequisites.length > 0 && (
+                  <div className="p-4 rounded-2xl bg-zinc-900/60 border border-zinc-800">
+                    <h4 className="text-xs font-bold text-white uppercase tracking-wider mb-2.5 flex items-center gap-2">
+                      <BookOpen className="w-3.5 h-3.5 text-indigo-400" />
+                      Prerequisites
+                    </h4>
+                    <ul className="space-y-1.5 text-xs text-zinc-300">
+                      {previewData.prerequisites.map((req, i) => (
+                        <li key={i} className="flex items-start gap-2">
+                          <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 mt-1.5 flex-shrink-0" />
+                          <span>{req}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {/* Learning Outcomes */}
+                {previewData.learningOutcomes && previewData.learningOutcomes.length > 0 && (
+                  <div className="p-4 rounded-2xl bg-zinc-900/60 border border-zinc-800">
+                    <h4 className="text-xs font-bold text-white uppercase tracking-wider mb-2.5 flex items-center gap-2">
+                      <Award className="w-3.5 h-3.5 text-emerald-400" />
+                      Learning Outcomes
+                    </h4>
+                    <ul className="space-y-1.5 text-xs text-zinc-300">
+                      {previewData.learningOutcomes.map((outcome, i) => (
+                        <li key={i} className="flex items-start gap-2">
+                          <Check className="w-3.5 h-3.5 text-emerald-400 mt-0.5 flex-shrink-0" />
+                          <span>{outcome}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+
+              {/* Curriculum Modules Accordion */}
+              <div>
+                <h4 className="text-xs font-bold text-white uppercase tracking-wider mb-3 flex items-center gap-2">
+                  <Layers className="w-3.5 h-3.5 text-cyan-400" />
+                  Curriculum Roadmap ({previewData.modules.length} Modules)
+                </h4>
+
+                <div className="space-y-3">
+                  {previewData.modules.map((mod) => {
+                    const isExpanded = !!expandedModules[mod.order];
+
+                    return (
+                      <div
+                        key={mod.order}
+                        className="rounded-2xl border transition-all"
+                        style={{
+                          background: isExpanded ? 'rgba(99,102,241,0.04)' : 'rgba(255,255,255,0.02)',
+                          borderColor: isExpanded ? 'rgba(99,102,241,0.3)' : 'rgba(255,255,255,0.06)',
+                        }}
+                      >
+                        {/* Module Header Toggle */}
+                        <button
+                          onClick={() => toggleModuleExpand(mod.order)}
+                          className="w-full p-4 flex items-center justify-between text-left gap-4"
+                        >
+                          <div className="flex items-center gap-3">
+                            <span
+                              className="w-7 h-7 rounded-xl flex items-center justify-center text-xs font-bold font-mono"
+                              style={{
+                                background: isExpanded ? 'rgba(99,102,241,0.2)' : 'rgba(255,255,255,0.05)',
+                                color: isExpanded ? '#a5b4fc' : '#9ca3af',
+                                border: `1px solid ${isExpanded ? 'rgba(99,102,241,0.4)' : 'rgba(255,255,255,0.08)'}`,
+                              }}
+                            >
+                              {mod.order}
+                            </span>
+                            <div>
+                              <h5 className="text-sm font-bold text-white">{mod.title}</h5>
+                              <p className="text-xs text-zinc-400 mt-0.5 line-clamp-1">{mod.description}</p>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-3 flex-shrink-0">
+                            <span className="text-[11px] font-mono text-zinc-400">
+                              {mod.estimatedHours} hrs • {mod.lessons.length} lessons
+                            </span>
+                            {isExpanded ? (
+                              <ChevronUp className="w-4 h-4 text-indigo-400" />
+                            ) : (
+                              <ChevronDown className="w-4 h-4 text-zinc-500" />
+                            )}
+                          </div>
+                        </button>
+
+                        {/* Module Expanded Content: Lessons */}
+                        {isExpanded && (
+                          <div className="px-4 pb-4 pt-1 border-t border-zinc-800/60 space-y-3">
+                            {mod.objectives && mod.objectives.length > 0 && (
+                              <div className="mb-3 pt-2">
+                                <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-500 block mb-1">
+                                  Module Objectives
+                                </span>
+                                <ul className="text-xs text-zinc-300 space-y-1">
+                                  {mod.objectives.map((obj, oi) => (
+                                    <li key={oi} className="flex items-center gap-1.5">
+                                      <span className="w-1 h-1 rounded-full bg-cyan-400" />
+                                      <span>{obj}</span>
+                                    </li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
+
+                            <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-500 block mb-1">
+                              Lessons
+                            </span>
+
+                            {mod.lessons.map((lesson) => (
+                              <div
+                                key={lesson.order}
+                                className="p-3 rounded-xl bg-zinc-900/80 border border-zinc-800/80 space-y-2"
+                              >
+                                <div className="flex items-start justify-between gap-3">
+                                  <div className="flex items-center gap-2">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 flex-shrink-0" />
+                                    <h6 className="text-xs font-bold text-white">{lesson.title}</h6>
+                                  </div>
+                                  <span className="text-[10px] font-mono text-indigo-300 flex-shrink-0">
+                                    {lesson.estimatedMinutes} mins
+                                  </span>
+                                </div>
+
+                                <p className="text-[11px] text-zinc-400 pl-3.5 leading-relaxed">
+                                  {lesson.description}
+                                </p>
+
+                                {lesson.keyConcepts && lesson.keyConcepts.length > 0 && (
+                                  <div className="flex flex-wrap gap-1.5 pl-3.5 pt-1">
+                                    {lesson.keyConcepts.map((kc, kci) => (
+                                      <span
+                                        key={kci}
+                                        className="text-[9px] font-medium px-2 py-0.5 rounded-md bg-zinc-800 text-zinc-300 border border-zinc-700/60"
+                                      >
+                                        {kc}
+                                      </span>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            {/* Modal Footer CTA */}
+            <div className="p-6 border-t border-zinc-800 bg-zinc-900/80 flex items-center justify-between gap-4">
+              <span className="text-xs text-zinc-400">
+                Validated AI Curriculum Ready
+              </span>
+
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => setPreviewData(null)}
+                  className="px-4 py-2.5 rounded-xl text-xs font-semibold text-zinc-400 hover:text-white bg-zinc-800 hover:bg-zinc-700 transition-colors"
+                >
+                  Close Preview
+                </button>
+                <button
+                  onClick={() => {
+                    // For this checkpoint, show acknowledgment and redirect to course workspace
+                    router.push('/course/operating-systems');
+                  }}
+                  className="px-6 py-2.5 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-indigo-600 via-purple-600 to-cyan-500 hover:opacity-90 transition-opacity shadow-lg shadow-indigo-500/20"
+                >
+                  Create This Learning Path
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}
@@ -320,25 +622,26 @@ export default function Dashboard() {
               <input
                 ref={inputRef}
                 type="text"
+                disabled={generating}
                 placeholder="e.g., Learn Operating Systems, Master Machine Learning..."
                 value={query}
                 onChange={e => setQuery(e.target.value)}
                 onFocus={() => setInputFocused(true)}
                 onBlur={() => setInputFocused(false)}
-                className="flex-1 bg-transparent text-sm text-white placeholder-[var(--text-muted)] focus:outline-none py-3"
+                className="flex-1 bg-transparent text-sm text-white placeholder-[var(--text-muted)] focus:outline-none py-3 disabled:opacity-50"
                 autoComplete="off"
                 spellCheck="false"
               />
               <button
                 type="submit"
-                disabled={!query.trim()}
+                disabled={!query.trim() || generating}
                 className="flex-shrink-0 flex items-center gap-2 px-6 py-3 rounded-2xl text-xs font-bold tracking-wide text-white uppercase transition-all duration-200 disabled:opacity-35 disabled:pointer-events-none"
                 style={{
                   background: 'linear-gradient(135deg, var(--primary) 0%, #7c3aed 50%, var(--cyan) 100%)',
-                  boxShadow: query.trim() ? '0 0 20px -4px rgba(99,102,241,0.4)' : 'none',
+                  boxShadow: query.trim() && !generating ? '0 0 20px -4px rgba(99,102,241,0.4)' : 'none',
                 }}
               >
-                <span>Generate My Learning Path</span>
+                <span>{generating ? 'Generating...' : 'Generate My Learning Path'}</span>
                 <ArrowRight className="w-3.5 h-3.5" />
               </button>
             </div>
@@ -348,9 +651,10 @@ export default function Dashboard() {
               {/* Experience Level Selector */}
               <div className="relative">
                 <select
+                  disabled={generating}
                   value={experienceLevel}
                   onChange={(e) => setExperienceLevel(e.target.value as DifficultyLevel)}
-                  className="appearance-none bg-zinc-900/90 hover:bg-zinc-800/90 text-zinc-300 hover:text-white border border-zinc-800/80 rounded-xl text-[11px] font-semibold px-3 py-1.5 pr-7 focus:outline-none focus:border-indigo-500/50 cursor-pointer transition-colors"
+                  className="appearance-none bg-zinc-900/90 hover:bg-zinc-800/90 text-zinc-300 hover:text-white border border-zinc-800/80 rounded-xl text-[11px] font-semibold px-3 py-1.5 pr-7 focus:outline-none focus:border-indigo-500/50 cursor-pointer transition-colors disabled:opacity-50"
                 >
                   <option value="beginner">Experience: Beginner</option>
                   <option value="intermediate">Experience: Intermediate</option>
@@ -362,9 +666,10 @@ export default function Dashboard() {
               {/* Goal Selector */}
               <div className="relative">
                 <select
+                  disabled={generating}
                   value={goal}
                   onChange={(e) => setGoal(e.target.value)}
-                  className="appearance-none bg-zinc-900/90 hover:bg-zinc-800/90 text-zinc-300 hover:text-white border border-zinc-800/80 rounded-xl text-[11px] font-semibold px-3 py-1.5 pr-7 focus:outline-none focus:border-indigo-500/50 cursor-pointer transition-colors"
+                  className="appearance-none bg-zinc-900/90 hover:bg-zinc-800/90 text-zinc-300 hover:text-white border border-zinc-800/80 rounded-xl text-[11px] font-semibold px-3 py-1.5 pr-7 focus:outline-none focus:border-indigo-500/50 cursor-pointer transition-colors disabled:opacity-50"
                 >
                   <option value="General Learning">Goal: General Learning</option>
                   <option value="Exam Preparation">Goal: Exam Preparation</option>
@@ -378,9 +683,10 @@ export default function Dashboard() {
               {/* Daily Study Time Selector */}
               <div className="relative">
                 <select
+                  disabled={generating}
                   value={minutesPerDay}
                   onChange={(e) => setMinutesPerDay(Number(e.target.value))}
-                  className="appearance-none bg-zinc-900/90 hover:bg-zinc-800/90 text-zinc-300 hover:text-white border border-zinc-800/80 rounded-xl text-[11px] font-semibold px-3 py-1.5 pr-7 focus:outline-none focus:border-indigo-500/50 cursor-pointer transition-colors"
+                  className="appearance-none bg-zinc-900/90 hover:bg-zinc-800/90 text-zinc-300 hover:text-white border border-zinc-800/80 rounded-xl text-[11px] font-semibold px-3 py-1.5 pr-7 focus:outline-none focus:border-indigo-500/50 cursor-pointer transition-colors disabled:opacity-50"
                 >
                   <option value={15}>15 min/day</option>
                   <option value={30}>30 min/day</option>
@@ -396,10 +702,11 @@ export default function Dashboard() {
                 <Calendar className="w-3 h-3 text-zinc-400 absolute left-2.5 pointer-events-none" />
                 <input
                   type="date"
+                  disabled={generating}
                   value={targetDate}
                   onChange={(e) => setTargetDate(e.target.value)}
                   placeholder="Target date"
-                  className="bg-zinc-900/90 hover:bg-zinc-800/90 text-zinc-300 hover:text-white border border-zinc-800/80 rounded-xl text-[11px] font-semibold pl-7 pr-3 py-1.5 focus:outline-none focus:border-indigo-500/50 cursor-pointer transition-colors min-w-[130px]"
+                  className="bg-zinc-900/90 hover:bg-zinc-800/90 text-zinc-300 hover:text-white border border-zinc-800/80 rounded-xl text-[11px] font-semibold pl-7 pr-3 py-1.5 focus:outline-none focus:border-indigo-500/50 cursor-pointer transition-colors min-w-[130px] disabled:opacity-50"
                 />
               </div>
             </div>
@@ -408,7 +715,12 @@ export default function Dashboard() {
           {/* Prompt suggestions */}
           <div className="animate-fade-up delay-300 flex flex-wrap items-center justify-center gap-2 mt-5">
             {PROMPTS.map(p => (
-              <button key={p} className="prompt-pill" onClick={() => { setQuery(p); inputRef.current?.focus(); }}>
+              <button
+                key={p}
+                disabled={generating}
+                className="prompt-pill disabled:opacity-50"
+                onClick={() => { setQuery(p); inputRef.current?.focus(); }}
+              >
                 {p}
               </button>
             ))}
@@ -584,7 +896,7 @@ export default function Dashboard() {
 
               {/* Task list */}
               <div className="space-y-2">
-                {tasks.map((task, i) => (
+                {tasks.map((task) => (
                   <div
                     key={task.id}
                     onClick={() => toggleTask(task.id)}
