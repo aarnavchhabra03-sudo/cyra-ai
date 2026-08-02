@@ -1,8 +1,8 @@
 'use client';
 
-import React, { useState, useEffect, use } from 'react';
+import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useParams } from 'next/navigation';
 import { ArrowLeft, Map, FileText, BookOpen, FileCheck, Bot, Loader2, AlertTriangle } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import RoadmapTab from '@/components/roadmap-tab';
@@ -22,12 +22,9 @@ const TABS: { type: TabType; label: string; icon: React.ComponentType<{ classNam
   { type: 'tutor', label: 'AI Tutor', icon: Bot },
 ];
 
-interface PageProps {
-  params: Promise<{ id: string }>;
-}
-
-export default function CourseWorkspace({ params }: PageProps) {
-  const { id: learningPathId } = use(params);
+export default function CourseWorkspace() {
+  const params = useParams();
+  const learningPathId = params?.id as string;
   const router = useRouter();
 
   const [loading, setLoading] = useState(true);
@@ -44,6 +41,8 @@ export default function CourseWorkspace({ params }: PageProps) {
 
   useEffect(() => {
     async function fetchCourseData() {
+      if (!learningPathId) return;
+
       setLoading(true);
       setError(null);
 
@@ -138,7 +137,7 @@ export default function CourseWorkspace({ params }: PageProps) {
             return {
               id: l.id,
               title: l.title,
-              description: l.description || '',
+              description: l.description || (l.content ? l.content.split('\n')[0].replace(/^#+\s*/, '') : ''),
               status,
               type: 'concept' as const,
               estimatedMinutes: l.estimated_minutes || 15,
@@ -202,11 +201,11 @@ export default function CourseWorkspace({ params }: PageProps) {
           <h3 className="text-base font-bold text-white">Workspace Error</h3>
           <p className="text-xs text-zinc-400 leading-relaxed">{error}</p>
           <Link
-            href="/"
+            href="/courses"
             className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-zinc-800 text-xs font-semibold text-white hover:bg-zinc-700 transition-colors"
           >
             <ArrowLeft className="w-3.5 h-3.5" />
-            <span>Return to Dashboard</span>
+            <span>Return to My Courses</span>
           </Link>
         </div>
       </div>
@@ -222,7 +221,7 @@ export default function CourseWorkspace({ params }: PageProps) {
       >
         <div className="flex items-center gap-4">
           <Link
-            href="/"
+            href="/courses"
             className="flex items-center justify-center w-7 h-7 rounded-lg transition-colors"
             style={{ background: 'var(--bg-raised)', border: '1px solid var(--border)', color: 'var(--text-secondary)' }}
             onMouseEnter={e => (e.currentTarget.style.color = '#fff')}

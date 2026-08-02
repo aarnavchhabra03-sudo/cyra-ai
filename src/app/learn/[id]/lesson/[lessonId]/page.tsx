@@ -1,8 +1,8 @@
 'use client';
 
-import React, { useState, useEffect, use } from 'react';
+import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useParams } from 'next/navigation';
 import {
   ArrowLeft,
   ArrowRight,
@@ -20,10 +20,6 @@ import {
 import { createClient } from '@/lib/supabase/client';
 import LessonContentRenderer from '@/components/lesson-content-renderer';
 
-interface PageProps {
-  params: Promise<{ id: string; lessonId: string }>;
-}
-
 interface FlatLesson {
   id: string;
   title: string;
@@ -35,9 +31,12 @@ interface FlatLesson {
   estimatedMinutes: number;
 }
 
-export default function LessonPage({ params }: PageProps) {
+export default function LessonPage() {
   const router = useRouter();
-  const { id: learningPathId, lessonId } = use(params);
+  const rawParams = useParams();
+
+  const learningPathId = rawParams?.id as string;
+  const lessonId = rawParams?.lessonId as string;
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<{ message: string; code: string } | null>(null);
@@ -62,10 +61,15 @@ export default function LessonPage({ params }: PageProps) {
 
   useEffect(() => {
     async function loadLessonData() {
+      if (!learningPathId || !lessonId) {
+        console.warn('[LESSON ROUTE DEBUG] PARAMS NOT READY YET:', { learningPathId, lessonId });
+        return;
+      }
+
       setLoading(true);
       setError(null);
 
-      console.log('[CYRA DEBUG] LESSON READER INITIALIZING:', { learningPathId, lessonId });
+      console.log('[LESSON ROUTE DEBUG]', { learningPathId, lessonId });
 
       try {
         const supabase = createClient();
@@ -142,7 +146,7 @@ export default function LessonPage({ params }: PageProps) {
 
         const moduleIds = modulesData.map(m => m.id);
 
-        // 4. Fetch All Lessons for these Modules (select '*' to match live Supabase PostgREST schema cache)
+        // 4. Fetch All Lessons for these Modules (select '*' to match PostgREST schema)
         const { data: lessonsData, error: lessonsErr } = await supabase
           .from('lessons')
           .select('*')
@@ -150,12 +154,7 @@ export default function LessonPage({ params }: PageProps) {
           .order('lesson_order', { ascending: true });
 
         if (lessonsErr) {
-          console.error('[CYRA DEBUG] LESSONS FETCH ERROR:', {
-            code: lessonsErr.code,
-            message: lessonsErr.message,
-            details: lessonsErr.details,
-            hint: lessonsErr.hint
-          });
+          console.error('[CYRA DEBUG] LESSONS FETCH ERROR:', lessonsErr);
           setError({
             message: 'Failed to fetch lesson content from database.',
             code: 'DATABASE_ERROR',
@@ -266,7 +265,6 @@ export default function LessonPage({ params }: PageProps) {
       if (!user) return;
 
       if (nextCompleted) {
-        // Record completion safely (safe against duplicates)
         await supabase
           .from('user_progress')
           .upsert(
@@ -274,7 +272,6 @@ export default function LessonPage({ params }: PageProps) {
             { onConflict: 'user_id,lesson_id' }
           );
       } else {
-        // Unmark completion
         await supabase
           .from('user_progress')
           .delete()
@@ -282,7 +279,6 @@ export default function LessonPage({ params }: PageProps) {
           .eq('lesson_id', lessonId);
       }
 
-      // Recalculate course completion progress percentage
       if (flatLessons.length > 0) {
         const allLessonIds = flatLessons.map(l => l.id);
         const { data: allProgress } = await supabase
@@ -296,7 +292,6 @@ export default function LessonPage({ params }: PageProps) {
 
         setCourseProgress(newPct);
 
-        // Update overall learning path progress in Supabase
         await supabase
           .from('learning_paths')
           .update({ progress: newPct })
@@ -388,7 +383,6 @@ export default function LessonPage({ params }: PageProps) {
       <main className="flex-1 max-w-4xl w-full mx-auto p-6 md:p-10 space-y-8">
         {/* Lesson Header Banner */}
         <div className="p-6 md:p-8 rounded-3xl bg-gradient-to-br from-zinc-900/90 via-zinc-900/60 to-indigo-950/20 border border-zinc-800/80 shadow-2xl relative overflow-hidden space-y-4">
-          {/* Subtle Glow */}
           <div className="absolute top-0 right-0 w-64 h-64 bg-indigo-500/5 rounded-full blur-3xl pointer-events-none" />
 
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-800/60 pb-4">
