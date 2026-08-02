@@ -138,6 +138,7 @@ export default function CourseWorkspace() {
               id: l.id,
               title: l.title,
               description: l.description || (l.content ? l.content.split('\n')[0].replace(/^#+\s*/, '') : ''),
+              content: l.content || '',
               status,
               type: 'concept' as const,
               estimatedMinutes: l.estimated_minutes || 15,
@@ -181,8 +182,24 @@ export default function CourseWorkspace() {
   };
 
   const allNodes = uiModules.flatMap(m =>
-    m.nodes.map(n => ({ id: n.id, title: n.title, status: n.status }))
+    m.nodes.map(n => ({
+      id: n.id,
+      title: n.title,
+      description: n.description,
+      content: (n as any).content || '',
+      status: n.status
+    }))
   );
+
+  const notesMap: { [nodeId: string]: { title: string; content: string } } = {};
+  uiModules.forEach(m => {
+    m.nodes.forEach(n => {
+      notesMap[n.id] = {
+        title: n.title,
+        content: (n as any).content || n.description || 'Study notes for this lesson are available in the interactive lesson reader.'
+      };
+    });
+  });
 
   if (loading) {
     return (
@@ -296,7 +313,7 @@ export default function CourseWorkspace() {
         )}
         {activeTab === 'notes' && (
           <NotesTab
-            notes={mockOSCourseDetail.notes}
+            notes={notesMap}
             activeNodeId={activeNodeId}
             nodeList={allNodes}
             onSelectNode={setActiveNodeId}
