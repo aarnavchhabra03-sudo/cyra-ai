@@ -121,7 +121,7 @@ export default function CourseWorkspace() {
       <div className="flex-1 overflow-y-auto p-7">
         {activeTab === 'roadmap'   && <RoadmapTab   modules={course.modules} onSelectNode={id => setActiveNodeId(id)} onSwitchTab={switchTab} />}
         {activeTab === 'notes'     && <NotesTab     notes={course.notes} activeNodeId={activeNodeId} nodeList={allNodes} onSelectNode={setActiveNodeId} onAskTutorAboutNote={t => { setTutorCtx(t); setActiveTab('tutor'); }} />}
-        {activeTab === 'resources' && <ResourcesTab videos={course.resources.videos} texts={course.resources.texts} />}
+        {activeTab === 'resources' && <ResourcesTab activeNodeId={activeNodeId} nodeList={allNodes} onSelectNode={setActiveNodeId} />}
         {activeTab === 'quiz'      && <QuizTab      quizzes={course.quizzes} onCompleteQuiz={pct => { if (pct >= 60) setProgress(p => Math.min(100, p + 15)); }} onSwitchTab={switchTab} />}
         {activeTab === 'tutor'     && <TutorTab     initialContext={tutorCtx} />}
       </div>

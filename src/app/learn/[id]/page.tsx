@@ -320,7 +320,13 @@ export default function CourseWorkspace() {
             onAskTutorAboutNote={t => { setTutorCtx(t); setActiveTab('tutor'); }}
           />
         )}
-        {activeTab === 'resources' && <ResourcesTab videos={mockOSCourseDetail.resources.videos} texts={mockOSCourseDetail.resources.texts} />}
+        {activeTab === 'resources' && (
+          <ResourcesTab
+            activeNodeId={activeNodeId}
+            nodeList={allNodes}
+            onSelectNode={setActiveNodeId}
+          />
+        )}
         {activeTab === 'quiz' && <QuizTab quizzes={mockOSCourseDetail.quizzes} onCompleteQuiz={pct => { if (pct >= 60) setProgress(p => Math.min(100, p + 15)); }} onSwitchTab={switchTab} />}
         {activeTab === 'tutor' && <TutorTab initialContext={tutorCtx} />}
       </div>
