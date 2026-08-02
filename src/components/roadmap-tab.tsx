@@ -34,10 +34,15 @@ export default function RoadmapTab({
   const router = useRouter();
   const [selectedNode, setSelectedNode] = useState<RoadmapNode | null>(null);
   const [selectedModuleId, setSelectedModuleId] = useState<string | null>(null);
+  const [selectedModuleIdx, setSelectedModuleIdx] = useState<number>(0);
+  const [selectedNodeIdx, setSelectedNodeIdx] = useState<number>(0);
 
-  const handleNodeClick = (node: RoadmapNode, moduleId: string) => {
+  const handleNodeClick = (node: RoadmapNode, moduleId: string, modIdx: number, nodeIdx: number) => {
     setSelectedNode(node);
     setSelectedModuleId(moduleId);
+    setSelectedModuleIdx(modIdx);
+    setSelectedNodeIdx(nodeIdx);
+    onSelectNode(node.id, node.title);
   };
 
   const handleStartLearning = () => {
@@ -81,15 +86,15 @@ export default function RoadmapTab({
               {/* Vertical connecting line */}
               <div className="absolute left-4 top-2 bottom-6 w-0.5 bg-gradient-to-b from-indigo-500/30 to-zinc-800" />
 
-              {mod.nodes.map((node) => {
+              {mod.nodes.map((node, nodeIdx) => {
                 const isSelected = selectedNode?.id === node.id;
                 return (
                   <div 
                     key={node.id} 
-                    onClick={() => handleNodeClick(node, mod.id)}
+                    onClick={() => handleNodeClick(node, mod.id, modIdx, nodeIdx)}
                     className={`ml-4 p-4 rounded-xl border transition-all duration-200 cursor-pointer relative group ${
                       isSelected
-                        ? 'bg-indigo-600/10 border-indigo-500/60 shadow-[0_0_15px_rgba(99,102,241,0.15)]'
+                        ? 'bg-indigo-600/15 border-indigo-500 ring-1 ring-indigo-500/30 shadow-[0_0_20px_rgba(99,102,241,0.2)]'
                         : 'bg-zinc-900/30 border-zinc-800/80 hover:bg-zinc-800/20 hover:border-indigo-500/40'
                     }`}
                   >
@@ -107,6 +112,9 @@ export default function RoadmapTab({
                     <div className="flex justify-between items-start gap-4">
                       <div className="space-y-1">
                         <div className="flex items-center gap-2">
+                          <span className="text-[9px] font-mono text-zinc-500">
+                            {modIdx + 1}.{nodeIdx + 1}
+                          </span>
                           <h5 className={`text-xs font-bold ${
                             node.status === 'locked' ? 'text-zinc-500' : 'text-zinc-200 group-hover:text-white'
                           }`}>
@@ -132,24 +140,20 @@ export default function RoadmapTab({
                           <span>{node.estimatedMinutes}m</span>
                         </div>
 
-                        {learningPathId ? (
-                          <Link
-                            href={`/learn/${learningPathId}/lesson/${node.id}`}
-                            onClick={(e) => e.stopPropagation()}
-                            className="px-2.5 py-1 rounded-lg bg-indigo-600/20 hover:bg-indigo-600 text-indigo-300 hover:text-white border border-indigo-500/30 text-[10px] font-semibold flex items-center gap-1 transition-all"
-                          >
-                            <span>Open</span>
-                            <ArrowRight className="w-3 h-3" />
-                          </Link>
-                        ) : (
-                          node.status === 'completed' ? (
-                            <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                          ) : node.status === 'in_progress' ? (
-                            <Circle className="w-4 h-4 text-indigo-400 animate-pulse-glow" />
-                          ) : (
-                            <Lock className="w-3.5 h-3.5 text-zinc-600" />
-                          )
-                        )}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleNodeClick(node, mod.id, modIdx, nodeIdx);
+                          }}
+                          className={`px-2.5 py-1 rounded-lg border text-[10px] font-semibold flex items-center gap-1 transition-all ${
+                            isSelected
+                              ? 'bg-indigo-600 text-white border-indigo-400 shadow-sm shadow-indigo-500/30'
+                              : 'bg-indigo-600/20 hover:bg-indigo-600 text-indigo-300 hover:text-white border-indigo-500/30'
+                          }`}
+                        >
+                          <span>{isSelected ? 'Selected' : 'Open'}</span>
+                          <ArrowRight className="w-3 h-3" />
+                        </button>
                       </div>
                     </div>
                   </div>
@@ -160,41 +164,59 @@ export default function RoadmapTab({
         ))}
       </div>
 
-      {/* Node Details Inspection Side-Panel (4 Cols) */}
+      {/* Selected Lesson Inspection Side-Panel (4 Cols) */}
       <div className="lg:col-span-4 lg:sticky lg:top-8 space-y-4">
         {selectedNode ? (
           <div className="p-5 rounded-2xl glass-panel border border-zinc-800/80 space-y-5 shadow-xl animate-fade-in">
             {/* Header info */}
             <div>
               <div className="flex items-center justify-between mb-2">
-                <span className={`text-[8px] font-mono font-bold px-2 py-0.5 rounded-full border ${
-                  selectedNode.status === 'completed'
-                    ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
-                    : selectedNode.status === 'in_progress'
-                    ? 'bg-indigo-500/10 text-indigo-400 border-indigo-500/20'
-                    : 'bg-zinc-900 text-zinc-500 border-zinc-800'
-                }`}>
-                  {selectedNode.status.toUpperCase()}
+                <span className="text-[9px] font-mono font-bold uppercase tracking-wider text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded-md border border-indigo-500/20">
+                  LESSON {selectedModuleIdx + 1}.{selectedNodeIdx + 1}
                 </span>
-                
-                <div className="flex items-center gap-1 text-[10px] font-mono text-zinc-400">
-                  <Clock className="w-3 h-3" />
-                  <span>{selectedNode.estimatedMinutes} Mins</span>
+
+                <div className="flex items-center gap-2">
+                  <span className={`text-[8px] font-mono font-bold px-2 py-0.5 rounded-full border ${
+                    selectedNode.status === 'completed'
+                      ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                      : selectedNode.status === 'in_progress'
+                      ? 'bg-indigo-500/10 text-indigo-400 border-indigo-500/20'
+                      : 'bg-zinc-900 text-zinc-500 border-zinc-800'
+                  }`}>
+                    {selectedNode.status.toUpperCase()}
+                  </span>
+                  
+                  <div className="flex items-center gap-1 text-[10px] font-mono text-zinc-400">
+                    <Clock className="w-3 h-3" />
+                    <span>{selectedNode.estimatedMinutes} Mins</span>
+                  </div>
                 </div>
               </div>
+
               <h4 className="text-sm font-bold text-white leading-snug">{selectedNode.title}</h4>
-              <p className="text-[11px] text-zinc-400 mt-1">{selectedNode.description}</p>
             </div>
 
-            {/* Core syllabus / topics list */}
+            {/* Overview / Description */}
+            {selectedNode.description && (
+              <div className="space-y-1">
+                <span className="text-[9px] font-mono font-bold text-zinc-500 uppercase tracking-wider block">
+                  Overview
+                </span>
+                <p className="text-[11px] text-zinc-400 leading-relaxed bg-zinc-950/50 p-3 rounded-xl border border-zinc-900">
+                  {selectedNode.description}
+                </p>
+              </div>
+            )}
+
+            {/* Lesson Content Preview */}
             {selectedNode.topics && selectedNode.topics.length > 0 && (
               <div className="space-y-2">
                 <span className="text-[9px] font-mono font-bold text-zinc-500 uppercase tracking-wider block">
-                  Topics Covered
+                  Lesson Content Preview
                 </span>
                 <div className="space-y-1.5">
                   {selectedNode.topics.map((topic, index) => (
-                    <div key={index} className="flex items-center gap-2 text-[10px] text-zinc-300 bg-zinc-900/60 p-2 rounded-lg border border-zinc-900">
+                    <div key={index} className="flex items-center gap-2 text-[10px] text-zinc-300 bg-zinc-900/60 p-2.5 rounded-lg border border-zinc-900">
                       <div className="w-1.5 h-1.5 rounded-full bg-cyan-400 flex-shrink-0" />
                       <span className="font-medium truncate">{topic}</span>
                     </div>
@@ -203,13 +225,13 @@ export default function RoadmapTab({
               </div>
             )}
 
-            {/* Learn CTA button */}
+            {/* Start Lesson CTA button */}
             <button
               onClick={handleStartLearning}
-              className="w-full py-2.5 px-4 rounded-xl bg-gradient-to-r from-indigo-500 to-cyan-500 hover:from-indigo-600 hover:to-cyan-600 text-white font-semibold text-xs flex items-center justify-center gap-2 transition-all duration-200 shadow-md shadow-indigo-500/10"
+              className="w-full py-2.5 px-4 rounded-xl bg-gradient-to-r from-indigo-500 via-purple-500 to-cyan-500 hover:opacity-90 text-white font-bold text-xs flex items-center justify-center gap-2 transition-all duration-200 shadow-md shadow-indigo-500/20"
             >
               <BookOpen className="w-3.5 h-3.5" />
-              <span>{learningPathId ? 'Open Interactive Lesson' : 'Read Study Notes'}</span>
+              <span>Start Lesson</span>
               <ArrowRight className="w-3.5 h-3.5" />
             </button>
           </div>
@@ -220,7 +242,7 @@ export default function RoadmapTab({
             </div>
             <div>
               <h4 className="text-xs font-bold text-zinc-300">Select a Roadmap Node</h4>
-              <p className="text-[10px] text-zinc-500 mt-1">Select any learning topic to open interactive lessons, inspect syllabus details, and track progress.</p>
+              <p className="text-[10px] text-zinc-500 mt-1">Select any learning topic from the roadmap tree to inspect lesson overview, duration, and start learning.</p>
             </div>
           </div>
         )}
