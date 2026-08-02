@@ -1,6 +1,15 @@
 import { GoogleGenAI } from '@google/genai';
-import { AIProvider, AIGenerateOptions, AIResponse, AILearningPathResponse, GenerateLearningPathOptions } from './types';
+import {
+  AIProvider,
+  AIGenerateOptions,
+  AIResponse,
+  AILearningPathResponse,
+  GenerateLearningPathOptions,
+  GenerateStudyNotesOptions,
+  AIStudyNotesResponse
+} from './types';
 import { validateLearningPath, LearningPathGeneration } from '@/types/ai';
+import { validateStudyNotes } from './groq';
 
 export const GEMINI_MODEL = 'gemini-2.0-flash-lite';
 
@@ -119,6 +128,68 @@ export class GeminiProvider implements AIProvider {
         provider: 'gemini',
         model: GEMINI_MODEL,
         error: error?.message || 'Gemini learning path generation failed.',
+        code: 'PROVIDER_ERROR',
+      };
+    }
+  }
+
+  async generateStudyNotes(
+    options: GenerateStudyNotesOptions
+  ): Promise<AIStudyNotesResponse> {
+    const apiKey = process.env.GEMINI_API_KEY;
+
+    if (!apiKey) {
+      return {
+        success: false,
+        provider: 'gemini',
+        model: GEMINI_MODEL,
+        error: 'GEMINI_API_KEY is not configured in environment variables.',
+        code: 'MISSING_API_KEY',
+      };
+    }
+
+    try {
+      const ai = new GoogleGenAI({ apiKey });
+
+      const response = await ai.models.generateContent({
+        model: GEMINI_MODEL,
+        contents: `Generate structured study notes JSON for lesson "${options.lessonTitle}" in course "${options.courseTitle || ''}" (${options.moduleTitle || ''}). Include JSON object with keys: overview (string), explanation (string), key_concepts (array of strings), examples (array of strings), important_points (array of strings), quick_revision (string).`,
+      });
+
+      const rawText = response.text?.trim();
+      if (!rawText) {
+        return {
+          success: false,
+          provider: 'gemini',
+          model: GEMINI_MODEL,
+          error: 'Empty response from Gemini.',
+          code: 'EMPTY_RESPONSE',
+        };
+      }
+
+      const parsed = JSON.parse(rawText.replace(/```json|```/g, '').trim());
+      if (!validateStudyNotes(parsed)) {
+        return {
+          success: false,
+          provider: 'gemini',
+          model: GEMINI_MODEL,
+          error: 'AI response failed study notes validation.',
+          code: 'VALIDATION_ERROR',
+        };
+      }
+
+      return {
+        success: true,
+        data: parsed,
+        provider: 'gemini',
+        model: GEMINI_MODEL,
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        provider: 'gemini',
+        model: GEMINI_MODEL,
+        error: error?.message || 'Gemini study notes generation failed.',
         code: 'PROVIDER_ERROR',
       };
     }

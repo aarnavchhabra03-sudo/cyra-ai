@@ -1,9 +1,30 @@
 import Groq from 'groq-sdk';
-import { AIProvider, AIGenerateOptions, AIResponse, AILearningPathResponse, GenerateLearningPathOptions } from './types';
+import {
+  AIProvider,
+  AIGenerateOptions,
+  AIResponse,
+  AILearningPathResponse,
+  GenerateLearningPathOptions,
+  GenerateStudyNotesOptions,
+  AIStudyNotesResponse,
+  StudyNotesData
+} from './types';
 import { validateLearningPath, LearningPathGeneration } from '@/types/ai';
 
 // Centralized Groq model definition
 export const GROQ_MODEL = 'llama-3.3-70b-versatile';
+
+export function validateStudyNotes(data: any): data is StudyNotesData {
+  if (!data || typeof data !== 'object') return false;
+  if (typeof data.overview !== 'string' || !data.overview.trim()) return false;
+  if (typeof data.explanation !== 'string' || !data.explanation.trim()) return false;
+  if (typeof data.quick_revision !== 'string' || !data.quick_revision.trim()) return false;
+  if (!Array.isArray(data.key_concepts) || data.key_concepts.length === 0) return false;
+  if (!Array.isArray(data.examples)) return false;
+  if (!Array.isArray(data.important_points) || data.important_points.length === 0) return false;
+
+  return true;
+}
 
 const SYSTEM_CURRICULUM_ARCHITECT_INSTRUCTION = `You are CYRA AI, an elite curriculum architect and master educator.
 Your sole mission is to synthesize deeply tailored, highly personalized, and structurally distinct learning paths.
@@ -43,83 +64,29 @@ You MUST respond strictly with a valid raw JSON object (NO markdown codeblock wr
     }
   ]
 }
+`;
 
-==================================================
-1. EXPERIENCE LEVEL STRUCTURAL RULES
-==================================================
-- "beginner":
-  * Assume little/no prior knowledge.
-  * Start with fundamental terminology, core mental models, and prerequisites before advanced topics.
-  * Avoid unexplained technical jargon. Progress gradually with clear conceptual examples.
-  * Prioritize foundational understanding over optimization or complex theory.
+const SYSTEM_STUDY_NOTES_INSTRUCTION = `You are CYRA AI, a master educator and academic study notes synthesizer.
+Your mission is to generate a comprehensive, highly structured, beginner-friendly study guide for a specific lesson topic.
 
-- "intermediate":
-  * Assume understanding of basics. Skip elementary introductions.
-  * Briefly review essential prerequisites, then rapidly move into deeper concepts and relationships.
-  * Emphasize practical applications, problem-solving patterns, and implementation trade-offs.
+CRITICAL MANDATE:
+You MUST respond strictly with a valid raw JSON object matching this exact schema (NO markdown codeblock wrappers like \`\`\`json):
 
-- "advanced":
-  * Skip basic introductory lessons entirely.
-  * Focus on architecture, internal mechanisms, low-level mechanics, design decisions, and system trade-offs.
-  * Include performance optimization, edge cases, debugging, real-world engineering challenges, and systems thinking.
-
-==================================================
-2. GOAL-BASED ARCHITECTURE RULES
-==================================================
-- "General Learning":
-  * 60% conceptual understanding, 25% practical application, 15% review.
-  * Comprehensive, logical coverage of the subject without specializing too heavily.
-
-- "Exam Preparation":
-  * Prioritize fundamental definitions, core formulas/theorems, commonly examined topics, conceptual differences, and practice.
-  * Later modules MUST be structured specifically around: Revision, Important Exam Concepts, Practice Questions, and Mock Exam Prep.
-  * Avoid spending time on industry-specific tool configurations unless academically relevant.
-
-- "Interview Preparation":
-  * Prioritize high-frequency interview questions, conceptual comparisons (e.g. Process vs Thread), "Why" trade-offs, scenario reasoning, and common misconceptions.
-  * Lessons MUST prepare learners to EXPLAIN concepts clearly and communicate technical trade-offs.
-  * Later modules MUST include Interview Practice, Technical Communication, and Mock Problem Solving.
-
-- "Build a Project":
-  * Structure curriculum progressively: Fundamentals → Core Concepts → Implementation Skills → System Components → Integration → Project Milestones → Final Project.
-  * Lessons MUST result in something being built, implemented, tested, or integrated. Avoid passive theory overload.
-
-- "Career Development":
-  * Prioritize industry-standard tools, production practices, architectural patterns, debugging, performance tuning, and real-world workflows.
-  * Connect every theoretical concept directly to how senior professionals apply it in production.
-
-==================================================
-3. DAILY STUDY TIME & PACING
-==================================================
-- 15 min/day: 5-15 minute bite-sized lessons. Avoid grouping difficult concepts into single lessons.
-- 30 min/day: 10-25 minute focused lessons (1-2 lessons per session).
-- 45-60 min/day: 15-40 minute lessons with deeper practical exercises.
-- 90 min/day: 20-50 minute lessons, deep implementation tasks, and hands-on milestones.
-- Adjust lesson sizes, exercise frequency, and estimated minutes to fit the daily study time.
-
-==================================================
-4. TARGET DATE CONSTRAINTS
-==================================================
-- If targetDate exists: Calculate deadline constraints relative to minutesPerDay. If time is tight, prune optional material, focus strictly on high-value core concepts, compress review, and prioritize goal alignment.
-- If no targetDate: Build a balanced, steady-paced curriculum.
-
-==================================================
-5. TOPIC-AWARE CUSTOMIZATION
-==================================================
-- Programming / CS: Emphasize code structure, algorithms, architecture, debugging, and implementation.
-- Mathematics / Hard Sciences: Emphasize definitions, worked problems, proofs, formulas, and practice sets.
-- Theoretical CS: Balance formal proofs, algorithmic reasoning, complexity, and mental models.
-- Humanities / Social Sciences: Emphasize historical context, theoretical frameworks, critical analysis, and synthesis.
-- Languages: Emphasize grammar rules, vocabulary, listening/reading comprehension, and conversational fluency.
-
-==================================================
-6. CURRICULUM QUALITY & INTEGRITY
-==================================================
-- Generate 5 to 9 modules total.
-- Each module MUST contain between 3 to 6 lessons.
-- All 'order' fields must start at 1 and increment sequentially.
-- Ensure all numeric values (estimatedWeeks, weeklyHours, estimatedHours, estimatedMinutes) are positive integers.
-- Perform an internal quality self-check to ensure changing goal or level produces a DRAMATICALLY DIFFERENT curriculum structure.`;
+{
+  "overview": "Clear 2-3 sentence introduction explaining what this topic is and why it matters.",
+  "explanation": "Detailed, comprehensive, beginner-friendly explanation covering core principles, architecture, and step-by-step logic. Use clear paragraphs and thorough educational explanations.",
+  "key_concepts": [
+    "3 to 7 key conceptual terms or definitions"
+  ],
+  "examples": [
+    "2 to 5 clear practical examples, code snippets, or real-world scenarios demonstrating the topic"
+  ],
+  "important_points": [
+    "3 to 7 high-value exam, interview, or technical revision points"
+  ],
+  "quick_revision": "A compact 2-4 sentence summary for rapid pre-exam review."
+}
+`;
 
 export class GroqProvider implements AIProvider {
   name = 'groq' as const;
@@ -140,31 +107,26 @@ export class GroqProvider implements AIProvider {
     try {
       const groq = new Groq({ apiKey });
 
-      const messages: Groq.Chat.Completions.ChatCompletionMessageParam[] = [];
+      const messages: Array<{ role: 'system' | 'user'; content: string }> = [];
 
       if (options.systemInstruction) {
-        messages.push({
-          role: 'system',
-          content: options.systemInstruction,
-        });
+        messages.push({ role: 'system', content: options.systemInstruction });
       }
 
-      messages.push({
-        role: 'user',
-        content: options.prompt,
-      });
+      messages.push({ role: 'user', content: options.prompt });
 
-      const response = await groq.chat.completions.create({
-        model: GROQ_MODEL,
+      const completion = await groq.chat.completions.create({
         messages,
+        model: GROQ_MODEL,
         temperature: options.temperature ?? 0.7,
-        max_tokens: options.maxTokens ?? 1024,
+        max_tokens: options.maxTokens ?? 2048,
         response_format: options.responseFormat === 'json' ? { type: 'json_object' } : undefined,
       });
 
-      const content = response.choices[0]?.message?.content?.trim();
+      const choice = completion.choices[0];
+      const messageContent = choice?.message?.content?.trim();
 
-      if (!content) {
+      if (!messageContent) {
         return {
           success: false,
           provider: 'groq',
@@ -176,25 +138,15 @@ export class GroqProvider implements AIProvider {
 
       return {
         success: true,
-        message: content,
+        message: messageContent,
         provider: 'groq',
         model: GROQ_MODEL,
       };
     } catch (error: any) {
-      const errString = typeof error === 'string' ? error : JSON.stringify(error) + (error?.message || '');
+      console.error('Groq API error:', error);
+
       const status = error?.status || error?.statusCode;
-
-      if (status === 401 || errString.includes('Invalid API Key') || errString.includes('unauthorized')) {
-        return {
-          success: false,
-          provider: 'groq',
-          model: GROQ_MODEL,
-          error: 'Invalid Groq API Key.',
-          code: 'INVALID_API_KEY',
-        };
-      }
-
-      if (status === 429 || errString.includes('rate_limit') || errString.includes('Rate limit')) {
+      if (status === 429) {
         return {
           success: false,
           provider: 'groq',
@@ -204,13 +156,21 @@ export class GroqProvider implements AIProvider {
         };
       }
 
-      console.error('GroqProvider generateContent error:', error?.message || error);
+      if (status === 401) {
+        return {
+          success: false,
+          provider: 'groq',
+          model: GROQ_MODEL,
+          error: 'Invalid Groq API Key.',
+          code: 'INVALID_API_KEY',
+        };
+      }
 
       return {
         success: false,
         provider: 'groq',
         model: GROQ_MODEL,
-        error: error?.message || 'Failed to communicate with Groq AI provider.',
+        error: error?.message || 'Failed to communicate with Groq API.',
         code: 'PROVIDER_ERROR',
       };
     }
@@ -234,61 +194,58 @@ export class GroqProvider implements AIProvider {
     try {
       const groq = new Groq({ apiKey });
 
-      const userPrompt = `Synthesize a highly customized learning path for the following user parameters:
+      const userPrompt = `Synthesize a personalized learning path for:
+Topic: "${options.topic}"
+Experience Level: ${options.experienceLevel}
+Goal: ${options.goal}
+Daily Study Commitment: ${options.minutesPerDay} minutes/day
+${options.targetDate ? `Target Completion Date: ${options.targetDate}` : ''}
 
-1. Topic: "${options.topic}"
-2. Target Experience Level: ${options.experienceLevel}
-3. Primary Learning Goal: ${options.goal}
-4. Daily Study Commitment: ${options.minutesPerDay} minutes/day
-5. Target Completion Date: ${options.targetDate || 'None (Flexible pacing)'}
+Generate a complete, structured curriculum JSON matching the system schema strictly.`;
 
-IMPORTANT ARCHITECTURAL INSTRUCTIONS:
-- Tailor module names, lesson titles, descriptions, key concepts, and exercise types specifically for ${options.experienceLevel} level learners pursuing ${options.goal}.
-- Structure the lesson durations (estimatedMinutes) to align with ${options.minutesPerDay} minutes/day.
-- If Goal is Exam Preparation: Include dedicated Revision and Exam Practice modules.
-- If Goal is Interview Preparation: Include technical explanation practice, conceptual comparison lessons, and scenario questions.
-- If Goal is Build a Project: Include practical implementation milestones, integration tasks, and final project build modules.
-
-Generate the complete JSON response strictly adhering to the specified schema.`;
-
-      const response = await groq.chat.completions.create({
-        model: GROQ_MODEL,
+      const completion = await groq.chat.completions.create({
         messages: [
           { role: 'system', content: SYSTEM_CURRICULUM_ARCHITECT_INSTRUCTION },
           { role: 'user', content: userPrompt },
         ],
-        temperature: 0.3,
-        max_tokens: 3800,
+        model: GROQ_MODEL,
+        temperature: 0.7,
+        max_tokens: 4096,
         response_format: { type: 'json_object' },
       });
 
-      const rawContent = response.choices[0]?.message?.content?.trim();
+      const rawContent = completion.choices[0]?.message?.content?.trim();
 
       if (!rawContent) {
         return {
           success: false,
           provider: 'groq',
           model: GROQ_MODEL,
-          error: 'Received empty response from Groq AI provider.',
+          error: 'Empty response returned from Groq AI API.',
           code: 'EMPTY_RESPONSE',
         };
       }
 
-      // Parse JSON output
-      let parsedJson: unknown;
+      const cleanJson = rawContent
+        .replace(/^```json\s*/, '')
+        .replace(/^```\s*/, '')
+        .replace(/\s*```$/, '')
+        .trim();
+
+      let parsedJson: any;
       try {
-        parsedJson = JSON.parse(rawContent);
-      } catch (jsonErr) {
+        parsedJson = JSON.parse(cleanJson);
+      } catch (parseErr) {
+        console.error('Failed to parse AI JSON:', rawContent);
         return {
           success: false,
           provider: 'groq',
           model: GROQ_MODEL,
-          error: 'Failed to parse JSON output from Groq LLM.',
-          code: 'JSON_PARSE_ERROR',
+          error: 'AI returned malformed non-JSON output.',
+          code: 'INVALID_JSON',
         };
       }
 
-      // Validate runtime schema with Zod
       try {
         const validatedPath: LearningPathGeneration = validateLearningPath(parsedJson);
 
@@ -325,6 +282,113 @@ Generate the complete JSON response strictly adhering to the specified schema.`;
         provider: 'groq',
         model: GROQ_MODEL,
         error: error?.message || 'Failed to generate learning path.',
+        code: 'PROVIDER_ERROR',
+      };
+    }
+  }
+
+  async generateStudyNotes(
+    options: GenerateStudyNotesOptions
+  ): Promise<AIStudyNotesResponse> {
+    const apiKey = process.env.GROQ_API_KEY;
+
+    if (!apiKey) {
+      return {
+        success: false,
+        provider: 'groq',
+        model: GROQ_MODEL,
+        error: 'GROQ_API_KEY is not configured in environment variables.',
+        code: 'MISSING_API_KEY',
+      };
+    }
+
+    try {
+      const groq = new Groq({ apiKey });
+
+      const userPrompt = `Synthesize comprehensive AI study notes for:
+Course: "${options.courseTitle || 'Computer Science'}" (Level: ${options.experienceLevel || 'beginner'})
+Module: "${options.moduleTitle || 'General Module'}"
+Lesson Title: "${options.lessonTitle}"
+Lesson Description / Scope: "${options.lessonDescription || options.lessonContent || 'Core fundamentals'}"
+
+Generate structured study notes strictly adhering to the JSON schema.`;
+
+      const completion = await groq.chat.completions.create({
+        messages: [
+          { role: 'system', content: SYSTEM_STUDY_NOTES_INSTRUCTION },
+          { role: 'user', content: userPrompt },
+        ],
+        model: GROQ_MODEL,
+        temperature: 0.6,
+        max_tokens: 4096,
+        response_format: { type: 'json_object' },
+      });
+
+      const rawContent = completion.choices[0]?.message?.content?.trim();
+
+      if (!rawContent) {
+        return {
+          success: false,
+          provider: 'groq',
+          model: GROQ_MODEL,
+          error: 'Empty response returned from Groq AI API.',
+          code: 'EMPTY_RESPONSE',
+        };
+      }
+
+      const cleanJson = rawContent
+        .replace(/^```json\s*/, '')
+        .replace(/^```\s*/, '')
+        .replace(/\s*```$/, '')
+        .trim();
+
+      let parsedJson: any;
+      try {
+        parsedJson = JSON.parse(cleanJson);
+      } catch (parseErr) {
+        console.error('Failed to parse Study Notes JSON:', rawContent);
+        return {
+          success: false,
+          provider: 'groq',
+          model: GROQ_MODEL,
+          error: 'AI returned malformed non-JSON output.',
+          code: 'INVALID_JSON',
+        };
+      }
+
+      if (!validateStudyNotes(parsedJson)) {
+        return {
+          success: false,
+          provider: 'groq',
+          model: GROQ_MODEL,
+          error: 'AI response failed study notes schema validation.',
+          code: 'VALIDATION_ERROR',
+        };
+      }
+
+      return {
+        success: true,
+        data: parsedJson,
+        provider: 'groq',
+        model: GROQ_MODEL,
+      };
+    } catch (error: any) {
+      const status = error?.status || error?.statusCode;
+      if (status === 429) {
+        return {
+          success: false,
+          provider: 'groq',
+          model: GROQ_MODEL,
+          error: 'AI provider rate limit reached.',
+          code: 'RATE_LIMIT_EXCEEDED',
+        };
+      }
+
+      return {
+        success: false,
+        provider: 'groq',
+        model: GROQ_MODEL,
+        error: error?.message || 'Failed to generate study notes.',
         code: 'PROVIDER_ERROR',
       };
     }
