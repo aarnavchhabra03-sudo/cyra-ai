@@ -36,6 +36,30 @@ export interface StudyNotesData {
   quick_revision: string;
 }
 
+export interface GenerateResourcePlanOptions {
+  courseTitle?: string;
+  moduleTitle?: string;
+  lessonTitle: string;
+  lessonDescription?: string;
+  lessonContent?: string;
+  experienceLevel?: string;
+}
+
+export interface ResourcePlanItem {
+  title: string;
+  resource_type: 'article' | 'documentation' | 'textbook' | 'video' | 'practice' | 'reference';
+  source: string;
+  description: string;
+  duration?: string;
+  difficulty?: string;
+  is_recommended: boolean;
+  search_query: string;
+}
+
+export interface ResourcePlanData {
+  resources: ResourcePlanItem[];
+}
+
 export interface AIResponse {
   success: boolean;
   message?: string;
@@ -63,9 +87,19 @@ export interface AIStudyNotesResponse {
   code?: string;
 }
 
+export interface AIResourcePlanResponse {
+  success: boolean;
+  data?: ResourcePlanData;
+  provider: AIProviderName;
+  model: string;
+  error?: string;
+  code?: string;
+}
+
 export interface AIProvider {
   name: AIProviderName;
   generateContent(options: AIGenerateOptions): Promise<AIResponse>;
   generateLearningPath(options: GenerateLearningPathOptions): Promise<AILearningPathResponse>;
   generateStudyNotes(options: GenerateStudyNotesOptions): Promise<AIStudyNotesResponse>;
+  generateResourcePlan(options: GenerateResourcePlanOptions): Promise<AIResourcePlanResponse>;
 }

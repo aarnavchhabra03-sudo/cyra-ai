@@ -6,10 +6,12 @@ import {
   AILearningPathResponse,
   GenerateLearningPathOptions,
   GenerateStudyNotesOptions,
-  AIStudyNotesResponse
+  AIStudyNotesResponse,
+  GenerateResourcePlanOptions,
+  AIResourcePlanResponse
 } from './types';
 import { validateLearningPath, LearningPathGeneration } from '@/types/ai';
-import { validateStudyNotes } from './groq';
+import { validateStudyNotes, validateResourcePlan } from './groq';
 
 export const GEMINI_MODEL = 'gemini-2.0-flash-lite';
 
@@ -190,6 +192,68 @@ export class GeminiProvider implements AIProvider {
         provider: 'gemini',
         model: GEMINI_MODEL,
         error: error?.message || 'Gemini study notes generation failed.',
+        code: 'PROVIDER_ERROR',
+      };
+    }
+  }
+
+  async generateResourcePlan(
+    options: GenerateResourcePlanOptions
+  ): Promise<AIResourcePlanResponse> {
+    const apiKey = process.env.GEMINI_API_KEY;
+
+    if (!apiKey) {
+      return {
+        success: false,
+        provider: 'gemini',
+        model: GEMINI_MODEL,
+        error: 'GEMINI_API_KEY is not configured in environment variables.',
+        code: 'MISSING_API_KEY',
+      };
+    }
+
+    try {
+      const ai = new GoogleGenAI({ apiKey });
+
+      const response = await ai.models.generateContent({
+        model: GEMINI_MODEL,
+        contents: `Generate structured resource discovery plan JSON for lesson "${options.lessonTitle}" in course "${options.courseTitle || ''}". Include JSON object with key "resources" containing array of objects with keys: title, resource_type, source, description, duration, difficulty, is_recommended, search_query.`,
+      });
+
+      const rawText = response.text?.trim();
+      if (!rawText) {
+        return {
+          success: false,
+          provider: 'gemini',
+          model: GEMINI_MODEL,
+          error: 'Empty response from Gemini.',
+          code: 'EMPTY_RESPONSE',
+        };
+      }
+
+      const parsed = JSON.parse(rawText.replace(/```json|```/g, '').trim());
+      if (!validateResourcePlan(parsed)) {
+        return {
+          success: false,
+          provider: 'gemini',
+          model: GEMINI_MODEL,
+          error: 'AI response failed resource plan validation.',
+          code: 'VALIDATION_ERROR',
+        };
+      }
+
+      return {
+        success: true,
+        data: parsed,
+        provider: 'gemini',
+        model: GEMINI_MODEL,
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        provider: 'gemini',
+        model: GEMINI_MODEL,
+        error: error?.message || 'Gemini resource plan generation failed.',
         code: 'PROVIDER_ERROR',
       };
     }

@@ -7,7 +7,10 @@ import {
   GenerateLearningPathOptions,
   GenerateStudyNotesOptions,
   AIStudyNotesResponse,
-  StudyNotesData
+  StudyNotesData,
+  GenerateResourcePlanOptions,
+  AIResourcePlanResponse,
+  ResourcePlanData
 } from './types';
 import { validateLearningPath, LearningPathGeneration } from '@/types/ai';
 
@@ -22,6 +25,24 @@ export function validateStudyNotes(data: any): data is StudyNotesData {
   if (!Array.isArray(data.key_concepts) || data.key_concepts.length === 0) return false;
   if (!Array.isArray(data.examples)) return false;
   if (!Array.isArray(data.important_points) || data.important_points.length === 0) return false;
+
+  return true;
+}
+
+export function validateResourcePlan(data: any): data is ResourcePlanData {
+  if (!data || typeof data !== 'object') return false;
+  if (!Array.isArray(data.resources) || data.resources.length === 0) return false;
+
+  const validTypes = ['article', 'documentation', 'textbook', 'video', 'practice', 'reference'];
+
+  for (const item of data.resources) {
+    if (!item || typeof item !== 'object') return false;
+    if (typeof item.title !== 'string' || !item.title.trim()) return false;
+    if (typeof item.resource_type !== 'string' || !validTypes.includes(item.resource_type.toLowerCase())) return false;
+    if (typeof item.source !== 'string' || !item.source.trim()) return false;
+    if (typeof item.description !== 'string' || !item.description.trim()) return false;
+    if (typeof item.search_query !== 'string' || !item.search_query.trim()) return false;
+  }
 
   return true;
 }
@@ -86,6 +107,32 @@ You MUST respond strictly with a valid raw JSON object matching this exact schem
   ],
   "quick_revision": "A compact 2-4 sentence summary for rapid pre-exam review."
 }
+`;
+
+const SYSTEM_RESOURCE_PLANNER_INSTRUCTION = `You are CYRA AI, an expert educational resource curator.
+Your mission is to generate a high-quality, balanced Resource Discovery Plan for a specific lesson topic.
+
+CRITICAL MANDATE:
+Do NOT invent fake web URLs. Generate metadata, highly specific search queries, and source recommendations.
+
+You MUST respond strictly with a valid raw JSON object matching this exact schema (NO markdown codeblock wrappers like \`\`\`json):
+
+{
+  "resources": [
+    {
+      "title": "Clear, informative title for the resource",
+      "resource_type": "article" | "documentation" | "textbook" | "video" | "practice" | "reference",
+      "source": "Platform or Author (e.g. GeeksforGeeks, MDN Web Docs, MIT OpenCourseWare, YouTube Channel)",
+      "description": "2-3 sentence overview of what this resource covers and why it is beneficial",
+      "duration": "e.g. '15 mins read', '12 mins video', '30 mins practice'",
+      "difficulty": "beginner" | "intermediate" | "advanced",
+      "is_recommended": true or false,
+      "search_query": "Precise, optimized search query to find this exact resource online"
+    }
+  ]
+}
+
+Generate approximately 5-7 high-value items with a balanced mix across reading (articles, docs), videos, and practice exercises.
 `;
 
 export class GroqProvider implements AIProvider {
@@ -389,6 +436,113 @@ Generate structured study notes strictly adhering to the JSON schema.`;
         provider: 'groq',
         model: GROQ_MODEL,
         error: error?.message || 'Failed to generate study notes.',
+        code: 'PROVIDER_ERROR',
+      };
+    }
+  }
+
+  async generateResourcePlan(
+    options: GenerateResourcePlanOptions
+  ): Promise<AIResourcePlanResponse> {
+    const apiKey = process.env.GROQ_API_KEY;
+
+    if (!apiKey) {
+      return {
+        success: false,
+        provider: 'groq',
+        model: GROQ_MODEL,
+        error: 'GROQ_API_KEY is not configured in environment variables.',
+        code: 'MISSING_API_KEY',
+      };
+    }
+
+    try {
+      const groq = new Groq({ apiKey });
+
+      const userPrompt = `Synthesize a Resource Discovery Plan for:
+Course: "${options.courseTitle || 'General Course'}" (${options.experienceLevel || 'beginner'} level)
+Module: "${options.moduleTitle || 'General Module'}"
+Lesson Title: "${options.lessonTitle}"
+Lesson Description / Context: "${options.lessonDescription || options.lessonContent || 'Core fundamentals'}"
+
+Generate a balanced list of 5 to 7 resources strictly matching the JSON schema.`;
+
+      const completion = await groq.chat.completions.create({
+        messages: [
+          { role: 'system', content: SYSTEM_RESOURCE_PLANNER_INSTRUCTION },
+          { role: 'user', content: userPrompt },
+        ],
+        model: GROQ_MODEL,
+        temperature: 0.6,
+        max_tokens: 2048,
+        response_format: { type: 'json_object' },
+      });
+
+      const rawContent = completion.choices[0]?.message?.content?.trim();
+
+      if (!rawContent) {
+        return {
+          success: false,
+          provider: 'groq',
+          model: GROQ_MODEL,
+          error: 'Empty response returned from Groq AI API.',
+          code: 'EMPTY_RESPONSE',
+        };
+      }
+
+      const cleanJson = rawContent
+        .replace(/^```json\s*/, '')
+        .replace(/^```\s*/, '')
+        .replace(/\s*```$/, '')
+        .trim();
+
+      let parsedJson: any;
+      try {
+        parsedJson = JSON.parse(cleanJson);
+      } catch (parseErr) {
+        console.error('Failed to parse Resource Plan JSON:', rawContent);
+        return {
+          success: false,
+          provider: 'groq',
+          model: GROQ_MODEL,
+          error: 'AI returned malformed non-JSON output.',
+          code: 'INVALID_JSON',
+        };
+      }
+
+      if (!validateResourcePlan(parsedJson)) {
+        return {
+          success: false,
+          provider: 'groq',
+          model: GROQ_MODEL,
+          error: 'AI response failed resource plan schema validation.',
+          code: 'VALIDATION_ERROR',
+        };
+      }
+
+      return {
+        success: true,
+        data: parsedJson,
+        provider: 'groq',
+        model: GROQ_MODEL,
+      };
+    } catch (error: any) {
+      const status = error?.status || error?.statusCode;
+      if (status === 429) {
+        return {
+          success: false,
+          provider: 'groq',
+          model: GROQ_MODEL,
+          error: 'AI provider rate limit reached.',
+          code: 'RATE_LIMIT_EXCEEDED',
+        };
+      }
+
+      return {
+        success: false,
+        provider: 'groq',
+        model: GROQ_MODEL,
+        error: error?.message || 'Failed to generate resource discovery plan.',
         code: 'PROVIDER_ERROR',
       };
     }
