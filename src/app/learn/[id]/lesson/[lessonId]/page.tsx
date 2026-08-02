@@ -40,7 +40,7 @@ export default function LessonPage({ params }: PageProps) {
   const { id: learningPathId, lessonId } = use(params);
 
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<{ message: string; code?: string } | null>(null);
+  const [error, setError] = useState<{ message: string; code: string } | null>(null);
 
   // Lesson & Context Data
   const [courseTitle, setCourseTitle] = useState('');
@@ -65,6 +65,8 @@ export default function LessonPage({ params }: PageProps) {
       setLoading(true);
       setError(null);
 
+      console.log('[CYRA DEBUG] LESSON READER INITIALIZING:', { learningPathId, lessonId });
+
       try {
         const supabase = createClient();
 
@@ -72,6 +74,7 @@ export default function LessonPage({ params }: PageProps) {
         const { data: { user }, error: authErr } = await supabase.auth.getUser();
 
         if (authErr || !user) {
+          console.error('[CYRA DEBUG] AUTH FAILURE:', authErr);
           setError({
             message: 'Authentication required. Please sign in to view this lesson.',
             code: 'AUTH_REQUIRED',
@@ -87,10 +90,21 @@ export default function LessonPage({ params }: PageProps) {
           .eq('id', learningPathId)
           .single();
 
-        if (pathErr || !pathRecord || pathRecord.user_id !== user.id) {
+        if (pathErr || !pathRecord) {
+          console.error('[CYRA DEBUG] LEARNING PATH FETCH ERROR:', pathErr);
           setError({
-            message: 'Learning path not found or access denied.',
-            code: 'NOT_FOUND',
+            message: 'Learning path not found in database.',
+            code: 'COURSE_NOT_FOUND',
+          });
+          setLoading(false);
+          return;
+        }
+
+        if (pathRecord.user_id !== user.id) {
+          console.error('[CYRA DEBUG] UNAUTHORIZED ACCESS ATTEMPT:', { ownerId: pathRecord.user_id, userId: user.id });
+          setError({
+            message: 'You are not authorized to view this learning path.',
+            code: 'UNAUTHORIZED',
           });
           setLoading(false);
           return;
@@ -102,14 +116,25 @@ export default function LessonPage({ params }: PageProps) {
         // 3. Fetch All Modules for this Learning Path (sorted by module_order)
         const { data: modulesData, error: modulesErr } = await supabase
           .from('modules')
-          .select('id, title, module_order')
+          .select('*')
           .eq('learning_path_id', learningPathId)
           .order('module_order', { ascending: true });
 
-        if (modulesErr || !modulesData || modulesData.length === 0) {
+        if (modulesErr) {
+          console.error('[CYRA DEBUG] MODULES FETCH ERROR:', modulesErr);
+          setError({
+            message: 'Failed to fetch course modules from database.',
+            code: 'DATABASE_ERROR',
+          });
+          setLoading(false);
+          return;
+        }
+
+        if (!modulesData || modulesData.length === 0) {
+          console.warn('[CYRA DEBUG] ZERO MODULES FOUND FOR PATH:', learningPathId);
           setError({
             message: 'No modules found for this learning path.',
-            code: 'NOT_FOUND',
+            code: 'MODULES_NOT_FOUND',
           });
           setLoading(false);
           return;
@@ -117,17 +142,33 @@ export default function LessonPage({ params }: PageProps) {
 
         const moduleIds = modulesData.map(m => m.id);
 
-        // 4. Fetch All Lessons for these Modules (sorted by lesson_order)
+        // 4. Fetch All Lessons for these Modules (select '*' to match live Supabase PostgREST schema cache)
         const { data: lessonsData, error: lessonsErr } = await supabase
           .from('lessons')
-          .select('id, module_id, title, description, content, estimated_minutes, lesson_order')
+          .select('*')
           .in('module_id', moduleIds)
           .order('lesson_order', { ascending: true });
 
-        if (lessonsErr || !lessonsData || lessonsData.length === 0) {
+        if (lessonsErr) {
+          console.error('[CYRA DEBUG] LESSONS FETCH ERROR:', {
+            code: lessonsErr.code,
+            message: lessonsErr.message,
+            details: lessonsErr.details,
+            hint: lessonsErr.hint
+          });
+          setError({
+            message: 'Failed to fetch lesson content from database.',
+            code: 'DATABASE_ERROR',
+          });
+          setLoading(false);
+          return;
+        }
+
+        if (!lessonsData || lessonsData.length === 0) {
+          console.warn('[CYRA DEBUG] ZERO LESSONS RETURNED FOR MODULES:', moduleIds);
           setError({
             message: 'No lessons found for this course.',
-            code: 'NOT_FOUND',
+            code: 'LESSONS_NOT_FOUND',
           });
           setLoading(false);
           return;
@@ -140,17 +181,18 @@ export default function LessonPage({ params }: PageProps) {
         modulesData.forEach(mod => {
           const modLessons = lessonsData
             .filter(l => l.module_id === mod.id)
-            .sort((a, b) => a.lesson_order - b.lesson_order);
+            .sort((a, b) => (a.lesson_order || 0) - (b.lesson_order || 0));
 
           modLessons.forEach(l => {
+            const desc = (l as any).description || (l.content ? l.content.split('\n')[0].replace(/^#+\s*/, '') : '');
             orderedFlatLessons.push({
               id: l.id,
               title: l.title,
-              description: l.description || '',
+              description: desc,
               moduleId: mod.id,
               moduleTitle: mod.title,
-              moduleOrder: mod.module_order,
-              lessonOrder: l.lesson_order,
+              moduleOrder: mod.module_order || 0,
+              lessonOrder: l.lesson_order || 0,
               estimatedMinutes: l.estimated_minutes || 15,
             });
           });
@@ -158,13 +200,14 @@ export default function LessonPage({ params }: PageProps) {
 
         setFlatLessons(orderedFlatLessons);
 
-        // 5. Find target lesson
+        // 5. Find target lesson by UUID
         const targetLessonIndex = orderedFlatLessons.findIndex(l => l.id === lessonId);
 
         if (targetLessonIndex === -1) {
+          console.warn('[CYRA DEBUG] REQUESTED LESSON ID NOT IN FLAT LESSONS:', lessonId);
           setError({
             message: 'Requested lesson was not found in this curriculum.',
-            code: 'NOT_FOUND',
+            code: 'LESSON_NOT_FOUND',
           });
           setLoading(false);
           return;
@@ -172,14 +215,15 @@ export default function LessonPage({ params }: PageProps) {
 
         const currentLessonObj = lessonsData.find(l => l.id === lessonId)!;
         const currentModObj = moduleMap.get(currentLessonObj.module_id);
+        const derivedDesc = (currentLessonObj as any).description || (currentLessonObj.content ? currentLessonObj.content.split('\n')[0].replace(/^#+\s*/, '') : '');
 
         setModuleTitle(currentModObj?.title || '');
         setLessonTitle(currentLessonObj.title);
-        setLessonDescription(currentLessonObj.description || '');
+        setLessonDescription(derivedDesc);
         setLessonContent(currentLessonObj.content || '');
         setEstimatedMinutes(currentLessonObj.estimated_minutes || 15);
 
-        // Set previous & next lesson links
+        // Set previous & next lesson navigation links
         setPrevLesson(targetLessonIndex > 0 ? orderedFlatLessons[targetLessonIndex - 1] : null);
         setNextLesson(targetLessonIndex < orderedFlatLessons.length - 1 ? orderedFlatLessons[targetLessonIndex + 1] : null);
 
@@ -192,11 +236,12 @@ export default function LessonPage({ params }: PageProps) {
           .single();
 
         setIsCompleted(!!progressRow);
+        console.log('[CYRA DEBUG] LESSON DATA LOADED SUCCESSFULLY:', { lessonId, title: currentLessonObj.title });
       } catch (err: any) {
-        console.error('Error loading lesson:', err);
+        console.error('[CYRA DEBUG] UNEXPECTED EXCEPTION:', err);
         setError({
           message: 'An unexpected error occurred loading this lesson.',
-          code: 'SERVER_ERROR',
+          code: 'DATABASE_ERROR',
         });
       } finally {
         setLoading(false);
@@ -285,6 +330,9 @@ export default function LessonPage({ params }: PageProps) {
           <div>
             <h3 className="text-base font-bold text-white mb-1">Lesson Unavailable</h3>
             <p className="text-xs text-zinc-400 leading-relaxed">{error.message}</p>
+            <span className="inline-block mt-2 text-[9px] font-mono text-zinc-600 bg-zinc-900 px-2 py-0.5 rounded border border-zinc-800">
+              Code: {error.code}
+            </span>
           </div>
           <Link
             href={`/learn/${learningPathId}`}
