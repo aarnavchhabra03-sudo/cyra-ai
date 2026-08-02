@@ -1,6 +1,8 @@
 'use client';
 
 import React, { useState } from 'react';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { 
   CheckCircle2, 
   Circle, 
@@ -16,11 +18,20 @@ import { Module, RoadmapNode } from '@/data/mockData';
 
 interface RoadmapTabProps {
   modules: Module[];
+  learningPathId?: string;
   onSelectNode: (nodeId: string, nodeTitle: string) => void;
   onSwitchTab: (tabName: 'roadmap' | 'notes' | 'resources' | 'quiz' | 'tutor') => void;
+  onOpenLesson?: (lessonId: string) => void;
 }
 
-export default function RoadmapTab({ modules, onSelectNode, onSwitchTab }: RoadmapTabProps) {
+export default function RoadmapTab({
+  modules,
+  learningPathId,
+  onSelectNode,
+  onSwitchTab,
+  onOpenLesson
+}: RoadmapTabProps) {
+  const router = useRouter();
   const [selectedNode, setSelectedNode] = useState<RoadmapNode | null>(null);
   const [selectedModuleId, setSelectedModuleId] = useState<string | null>(null);
 
@@ -30,9 +41,14 @@ export default function RoadmapTab({ modules, onSelectNode, onSwitchTab }: Roadm
   };
 
   const handleStartLearning = () => {
-    if (selectedNode) {
+    if (!selectedNode) return;
+
+    if (onOpenLesson) {
+      onOpenLesson(selectedNode.id);
+    } else if (learningPathId) {
+      router.push(`/learn/${learningPathId}/lesson/${selectedNode.id}`);
+    } else {
       onSelectNode(selectedNode.id, selectedNode.title);
-      // Switch tab to Notes
       onSwitchTab('notes');
     }
   };
@@ -74,7 +90,7 @@ export default function RoadmapTab({ modules, onSelectNode, onSwitchTab }: Roadm
                     className={`ml-4 p-4 rounded-xl border transition-all duration-200 cursor-pointer relative group ${
                       isSelected
                         ? 'bg-indigo-600/10 border-indigo-500/60 shadow-[0_0_15px_rgba(99,102,241,0.15)]'
-                        : 'bg-zinc-900/30 border-zinc-800/80 hover:bg-zinc-800/20 hover:border-zinc-700/80'
+                        : 'bg-zinc-900/30 border-zinc-800/80 hover:bg-zinc-800/20 hover:border-indigo-500/40'
                     }`}
                   >
                     {/* Active Node Indicator Left Dot */}
@@ -92,7 +108,7 @@ export default function RoadmapTab({ modules, onSelectNode, onSwitchTab }: Roadm
                       <div className="space-y-1">
                         <div className="flex items-center gap-2">
                           <h5 className={`text-xs font-bold ${
-                            node.status === 'locked' ? 'text-zinc-500' : 'text-zinc-200'
+                            node.status === 'locked' ? 'text-zinc-500' : 'text-zinc-200 group-hover:text-white'
                           }`}>
                             {node.title}
                           </h5>
@@ -109,19 +125,30 @@ export default function RoadmapTab({ modules, onSelectNode, onSwitchTab }: Roadm
                         </p>
                       </div>
 
-                      {/* Right Icons */}
+                      {/* Right Icons & Action */}
                       <div className="flex-shrink-0 flex items-center gap-2.5 text-zinc-500">
                         <div className="flex items-center gap-1 text-[9px] font-mono">
                           <Clock className="w-3 h-3" />
                           <span>{node.estimatedMinutes}m</span>
                         </div>
-                        
-                        {node.status === 'completed' ? (
-                          <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                        ) : node.status === 'in_progress' ? (
-                          <Circle className="w-4 h-4 text-indigo-400 animate-pulse-glow" />
+
+                        {learningPathId ? (
+                          <Link
+                            href={`/learn/${learningPathId}/lesson/${node.id}`}
+                            onClick={(e) => e.stopPropagation()}
+                            className="px-2.5 py-1 rounded-lg bg-indigo-600/20 hover:bg-indigo-600 text-indigo-300 hover:text-white border border-indigo-500/30 text-[10px] font-semibold flex items-center gap-1 transition-all"
+                          >
+                            <span>Open</span>
+                            <ArrowRight className="w-3 h-3" />
+                          </Link>
                         ) : (
-                          <Lock className="w-3.5 h-3.5 text-zinc-600" />
+                          node.status === 'completed' ? (
+                            <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                          ) : node.status === 'in_progress' ? (
+                            <Circle className="w-4 h-4 text-indigo-400 animate-pulse-glow" />
+                          ) : (
+                            <Lock className="w-3.5 h-3.5 text-zinc-600" />
+                          )
                         )}
                       </div>
                     </div>
@@ -160,36 +187,31 @@ export default function RoadmapTab({ modules, onSelectNode, onSwitchTab }: Roadm
             </div>
 
             {/* Core syllabus / topics list */}
-            <div className="space-y-2">
-              <span className="text-[9px] font-mono font-bold text-zinc-500 uppercase tracking-wider block">
-                Topics Covered
-              </span>
-              <div className="space-y-1.5">
-                {selectedNode.topics.map((topic, index) => (
-                  <div key={index} className="flex items-center gap-2 text-[10px] text-zinc-300 bg-zinc-900/60 p-2 rounded-lg border border-zinc-900">
-                    <div className="w-1.5 h-1.5 rounded-full bg-cyan-400 flex-shrink-0" />
-                    <span className="font-medium truncate">{topic}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Learn CTA button */}
-            {selectedNode.status !== 'locked' ? (
-              <button
-                onClick={handleStartLearning}
-                className="w-full py-2.5 px-4 rounded-xl bg-gradient-to-r from-indigo-500 to-cyan-500 hover:from-indigo-600 hover:to-cyan-600 text-white font-semibold text-xs flex items-center justify-center gap-2 transition-all duration-200 shadow-md shadow-indigo-500/10"
-              >
-                <BookOpen className="w-3.5 h-3.5" />
-                Read Study Notes
-                <ArrowRight className="w-3.5 h-3.5" />
-              </button>
-            ) : (
-              <div className="p-3 bg-zinc-950/60 border border-zinc-900 rounded-xl text-center flex items-center justify-center gap-2 text-[10px] text-zinc-500 font-medium">
-                <Lock className="w-3 h-3 text-zinc-600" />
-                Complete preceding nodes to unlock notes
+            {selectedNode.topics && selectedNode.topics.length > 0 && (
+              <div className="space-y-2">
+                <span className="text-[9px] font-mono font-bold text-zinc-500 uppercase tracking-wider block">
+                  Topics Covered
+                </span>
+                <div className="space-y-1.5">
+                  {selectedNode.topics.map((topic, index) => (
+                    <div key={index} className="flex items-center gap-2 text-[10px] text-zinc-300 bg-zinc-900/60 p-2 rounded-lg border border-zinc-900">
+                      <div className="w-1.5 h-1.5 rounded-full bg-cyan-400 flex-shrink-0" />
+                      <span className="font-medium truncate">{topic}</span>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
+
+            {/* Learn CTA button */}
+            <button
+              onClick={handleStartLearning}
+              className="w-full py-2.5 px-4 rounded-xl bg-gradient-to-r from-indigo-500 to-cyan-500 hover:from-indigo-600 hover:to-cyan-600 text-white font-semibold text-xs flex items-center justify-center gap-2 transition-all duration-200 shadow-md shadow-indigo-500/10"
+            >
+              <BookOpen className="w-3.5 h-3.5" />
+              <span>{learningPathId ? 'Open Interactive Lesson' : 'Read Study Notes'}</span>
+              <ArrowRight className="w-3.5 h-3.5" />
+            </button>
           </div>
         ) : (
           <div className="p-6 rounded-2xl glass-panel border border-zinc-900/80 text-center space-y-3 py-12">
@@ -198,7 +220,7 @@ export default function RoadmapTab({ modules, onSelectNode, onSwitchTab }: Roadm
             </div>
             <div>
               <h4 className="text-xs font-bold text-zinc-300">Select a Roadmap Node</h4>
-              <p className="text-[10px] text-zinc-500 mt-1">Select any unlocked learning topic to inspect syllabus details, tutorials, and notes.</p>
+              <p className="text-[10px] text-zinc-500 mt-1">Select any learning topic to open interactive lessons, inspect syllabus details, and track progress.</p>
             </div>
           </div>
         )}
