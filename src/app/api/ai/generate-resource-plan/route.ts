@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { getAIProvider } from '@/lib/ai/provider';
+import { searchTavily, sanitizeUrl, extractDomain } from '@/lib/search/tavily';
 
 export async function POST(request: Request) {
   // 1. Authenticate user via Supabase SSR
@@ -61,7 +62,23 @@ export async function POST(request: Request) {
   }
 
   try {
-    // 3. VERIFY LESSON AUTHORIZATION & FETCH LESSON CONTEXT
+    // 3. CACHE CHECK: Query existing persisted learning_resources for selected lesson
+    const { data: existingResources, error: fetchErr } = await supabase
+      .from('learning_resources')
+      .select('*')
+      .eq('lesson_id', lessonId)
+      .order('created_at', { ascending: true });
+
+    if (!fetchErr && existingResources && existingResources.length > 0) {
+      console.log('[GENERATE RESOURCES] DB CACHE HIT: Returning saved resources for lesson:', lessonId);
+      return NextResponse.json({
+        success: true,
+        data: existingResources,
+        cached: true,
+      });
+    }
+
+    // 4. VERIFY LESSON AUTHORIZATION & FETCH LESSON CONTEXT
     const { data: lessonRecord, error: lessonErr } = await supabase
       .from('lessons')
       .select(`
@@ -86,7 +103,7 @@ export async function POST(request: Request) {
       .single();
 
     if (lessonErr || !lessonRecord) {
-      console.error('[GENERATE RESOURCE PLAN] LESSON NOT FOUND:', lessonErr);
+      console.error('[GENERATE RESOURCES] LESSON NOT FOUND:', lessonErr);
       return NextResponse.json(
         {
           success: false,
@@ -104,15 +121,15 @@ export async function POST(request: Request) {
       return NextResponse.json(
         {
           success: false,
-          error: 'You are not authorized to generate resource plans for this lesson.',
+          error: 'You are not authorized to generate resources for this lesson.',
           code: 'UNAUTHORIZED',
         },
         { status: 403 }
       );
     }
 
-    // 4. CALL AI PROVIDER TO SYNTHESIZE RESOURCE DISCOVERY PLAN
-    console.log('[GENERATE RESOURCE PLAN] Generating AI Resource Discovery Plan for lesson:', lessonRecord.title);
+    // 5. STEP A — CALL AI PROVIDER TO SYNTHESIZE RESOURCE DISCOVERY PLAN
+    console.log('[GENERATE RESOURCES] Lesson:', lessonRecord.title);
 
     const provider = getAIProvider();
 
@@ -149,20 +166,114 @@ export async function POST(request: Request) {
       );
     }
 
-    // 5. STAGE 11.4 MANDATE: DO NOT WRITE TO DATABASE YET
-    // Return generated plan in client response without writing unverified URLs to public.learning_resources
+    const aiPlanItems = aiResponse.data.resources;
+    console.log(`[GENERATE RESOURCES] AI generated ${aiPlanItems.length} resource recommendations.`);
+
+    // 6. STEP B — DISCOVER VERIFIED LIVE URLS VIA TAVILY SEARCH
+    const verifiedResourcesToInsert: any[] = [];
+    const usedUrls = new Set<string>();
+
+    let totalSearches = 0;
+    let candidateCount = 0;
+    let rejectedCount = 0;
+
+    for (const item of aiPlanItems) {
+      const query = item.search_query || `${lessonRecord.title} ${item.title}`;
+      totalSearches++;
+
+      const tavilyResults = await searchTavily(query, 5);
+      candidateCount += tavilyResults.length;
+
+      let matchedResult = null;
+      let validUrl = null;
+
+      for (const res of tavilyResults) {
+        const sanitized = sanitizeUrl(res.url);
+        if (!sanitized) {
+          rejectedCount++;
+          continue;
+        }
+
+        if (usedUrls.has(sanitized)) {
+          rejectedCount++;
+          continue;
+        }
+
+        // Found a valid, non-duplicate http/https URL
+        validUrl = sanitized;
+        matchedResult = res;
+        break;
+      }
+
+      if (validUrl && matchedResult) {
+        usedUrls.add(validUrl);
+
+        const sourceDomain = item.source || extractDomain(validUrl);
+
+        verifiedResourcesToInsert.push({
+          lesson_id: lessonId,
+          title: item.title || matchedResult.title,
+          resource_type: (item.resource_type || 'article').toLowerCase(),
+          url: validUrl,
+          source: sourceDomain,
+          description: item.description || matchedResult.content?.slice(0, 200) || '',
+          duration: item.duration || null,
+          difficulty: (item.difficulty || 'beginner').toLowerCase(),
+          is_recommended: !!item.is_recommended,
+        });
+      } else {
+        console.warn(`[GENERATE RESOURCES] No valid search result found for query: "${query}"`);
+      }
+    }
+
+    console.log(`[GENERATE RESOURCES] LOGS:
+    - Lesson: "${lessonRecord.title}"
+    - AI Recommendations: ${aiPlanItems.length}
+    - Tavily Searches: ${totalSearches}
+    - Candidates Found: ${candidateCount}
+    - Candidates Rejected: ${rejectedCount}
+    - Verified & Ready to Persist: ${verifiedResourcesToInsert.length}`);
+
+    if (verifiedResourcesToInsert.length === 0) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'Could not find verified live web resources for this lesson. Please try again.',
+          code: 'NO_VALID_RESOURCES',
+        },
+        { status: 500 }
+      );
+    }
+
+    // 7. STEP C — PERSIST VERIFIED RESOURCES INTO PUBLIC.LEARNING_RESOURCES
+    const { data: insertedRows, error: insertErr } = await supabase
+      .from('learning_resources')
+      .insert(verifiedResourcesToInsert)
+      .select('*');
+
+    if (insertErr) {
+      console.error('[GENERATE RESOURCES] DB INSERT ERROR:', insertErr);
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'Failed to save verified learning resources to database.',
+          code: 'DB_SAVE_FAILED',
+        },
+        { status: 500 }
+      );
+    }
+
     return NextResponse.json({
       success: true,
-      resources: aiResponse.data.resources,
-      lessonId,
-      provider: aiResponse.provider,
+      data: insertedRows,
+      cached: false,
     });
   } catch (error: any) {
     console.error('Unhandled resource plan generation error:', error);
     return NextResponse.json(
       {
         success: false,
-        error: 'An unexpected server error occurred during resource plan generation.',
+        error: 'An unexpected server error occurred during resource discovery.',
         code: 'SERVER_ERROR',
       },
       { status: 500 }
