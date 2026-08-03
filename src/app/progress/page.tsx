@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { 
   TrendingUp, 
   Flame, 
@@ -12,7 +13,8 @@ import {
   AlertCircle,
   ArrowRight,
   Zap,
-  BookMarked
+  BookMarked,
+  Loader2
 } from 'lucide-react';
 import { mockUserStats } from '@/data/mockData';
 import { createClient } from '@/lib/supabase/client';
@@ -48,12 +50,15 @@ export interface AdaptiveSummaryUI {
 }
 
 export default function ProgressPage() {
+  const router = useRouter();
   const [masteryRecords, setMasteryRecords] = useState<ConceptMasteryRow[]>([]);
   const [loadingMastery, setLoadingMastery] = useState<boolean>(true);
   const [recommendations, setRecommendations] = useState<AdaptiveRecommendationUI[]>([]);
   const [summary, setSummary] = useState<AdaptiveSummaryUI | null>(null);
   const [loadingRecs, setLoadingRecs] = useState<boolean>(true);
   const [recsError, setRecsError] = useState<string | null>(null);
+  const [generatingConcept, setGeneratingConcept] = useState<string | null>(null);
+  const [genError, setGenError] = useState<string | null>(null);
 
   useEffect(() => {
     async function fetchData() {
@@ -97,6 +102,33 @@ export default function ProgressPage() {
     fetchData();
   }, []);
 
+  const handleStartPractice = async (concept: string, lessonId: string) => {
+    if (generatingConcept) return;
+
+    setGeneratingConcept(concept);
+    setGenError(null);
+
+    try {
+      const res = await fetch('/api/adaptive/practice/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ concept, lessonId }),
+      });
+
+      const result = await res.json();
+
+      if (!res.ok || !result.success || !result.data?.sessionId) {
+        throw new Error(result.error || 'Failed to generate practice session.');
+      }
+
+      router.push(`/practice/${result.data.sessionId}`);
+    } catch (err: any) {
+      console.error('[PROGRESS] Practice generation error:', err);
+      setGenError(err.message || 'Could not generate targeted practice.');
+      setGeneratingConcept(null);
+    }
+  };
+
   const statsList = [
     { label: 'Current level', value: mockUserStats.level, sub: mockUserStats.levelTitle, color: 'text-indigo-400', icon: Award },
     { label: 'Study streak', value: `${mockUserStats.streakDays} Days`, sub: 'Active Streak', color: 'text-amber-500', icon: Flame },
@@ -133,7 +165,7 @@ export default function ProgressPage() {
         })}
       </div>
 
-      {/* STAGE 12.5A: ADAPTIVE LEARNING RECOMMENDATIONS SECTION */}
+      {/* STAGE 12.5A & 12.5B: ADAPTIVE LEARNING RECOMMENDATIONS SECTION */}
       <div className="p-6 rounded-2xl glass-panel border border-zinc-800/80 space-y-5 shadow-xl">
         <div className="flex items-center justify-between border-b border-zinc-900 pb-4">
           <div className="flex items-center gap-2">
@@ -151,6 +183,13 @@ export default function ProgressPage() {
             </span>
           )}
         </div>
+
+        {genError && (
+          <div className="p-3.5 rounded-xl bg-red-950/40 border border-red-900/50 text-red-300 text-xs flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 flex-shrink-0 text-red-400" />
+            <span>{genError}</span>
+          </div>
+        )}
 
         {loadingRecs ? (
           <div className="py-6 text-center text-xs text-zinc-500 font-mono animate-pulse">
@@ -180,6 +219,7 @@ export default function ProgressPage() {
             {recommendations.slice(0, 3).map((rec, idx) => {
               const isCritical = rec.priority === 'critical' || rec.priority === 'high';
               const isMedium = rec.priority === 'medium';
+              const isGeneratingThis = generatingConcept === rec.concept;
 
               const priorityPillClass = isCritical
                 ? 'bg-red-950/60 border-red-500/40 text-red-300'
@@ -213,10 +253,30 @@ export default function ProgressPage() {
                     <p className="text-xs text-zinc-400 mt-1 leading-relaxed">{rec.reason}</p>
                   </div>
 
-                  <div className="pt-2 border-t border-zinc-900 flex items-center justify-between gap-2 text-xs">
-                    <span className="text-[11px] text-zinc-400 italic">
+                  <div className="pt-2 border-t border-zinc-900 flex items-center justify-between gap-2 flex-wrap text-xs">
+                    <span className="text-[11px] text-zinc-400 italic flex-1">
                       Action: {rec.suggestedAction}
                     </span>
+
+                    {rec.lessonId && (
+                      <button
+                        onClick={() => handleStartPractice(rec.concept, rec.lessonId!)}
+                        disabled={!!generatingConcept}
+                        className="py-1.5 px-4 rounded-lg bg-gradient-to-r from-indigo-500 to-cyan-500 hover:from-indigo-600 hover:to-cyan-600 text-white font-semibold text-xs transition-all shadow-md flex items-center gap-1.5 disabled:opacity-60 flex-shrink-0"
+                      >
+                        {isGeneratingThis ? (
+                          <>
+                            <Loader2 className="w-3.5 h-3.5 animate-spin text-white" />
+                            Generating Practice...
+                          </>
+                        ) : (
+                          <>
+                            Practice This Concept
+                            <ArrowRight className="w-3.5 h-3.5" />
+                          </>
+                        )}
+                      </button>
+                    )}
                   </div>
                 </div>
               );
