@@ -1,5 +1,5 @@
 -- ============================================================
--- CYRA AI DATABASE SCHEMA & ROW LEVEL SECURITY (RLS) POLICIES
+-- CYRA AI — SUPABASE DATABASE SCHEMA
 -- ============================================================
 
 -- Enable UUID extension
@@ -19,36 +19,29 @@ CREATE TABLE IF NOT EXISTS public.profiles (
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- RLS for Profiles
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 
-DROP POLICY IF EXISTS "Users can view their own profile" ON public.profiles;
-CREATE POLICY "Users can view their own profile"
+DROP POLICY IF EXISTS "Public profiles are viewable by everyone" ON public.profiles;
+CREATE POLICY "Public profiles are viewable by everyone"
   ON public.profiles FOR SELECT
-  USING (auth.uid() = id);
+  USING (true);
 
 DROP POLICY IF EXISTS "Users can update their own profile" ON public.profiles;
 CREATE POLICY "Users can update their own profile"
   ON public.profiles FOR UPDATE
   USING (auth.uid() = id);
 
-DROP POLICY IF EXISTS "Users can insert their own profile" ON public.profiles;
-CREATE POLICY "Users can insert their own profile"
-  ON public.profiles FOR INSERT
-  WITH CHECK (auth.uid() = id);
-
--- Trigger to auto-create profile on signup
+-- Trigger to automatically create a profile when a new user signs up
 CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS TRIGGER AS $$
 BEGIN
   INSERT INTO public.profiles (id, full_name, avatar_url)
   VALUES (
-    NEW.id,
-    COALESCE(NEW.raw_user_meta_data->>'full_name', 'CYRA Learner'),
-    NEW.raw_user_meta_data->>'avatar_url'
-  )
-  ON CONFLICT (id) DO NOTHING;
-  RETURN NEW;
+    new.id,
+    COALESCE(new.raw_user_meta_data->>'full_name', new.email, 'CYRA Scholar'),
+    new.raw_user_meta_data->>'avatar_url'
+  );
+  RETURN new;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
@@ -65,34 +58,19 @@ CREATE TABLE IF NOT EXISTS public.learning_paths (
   user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
   title TEXT NOT NULL,
   goal TEXT NOT NULL,
-  experience_level TEXT DEFAULT 'beginner',
-  minutes_per_day INTEGER DEFAULT 30,
-  status TEXT DEFAULT 'active' CHECK (status IN ('active', 'completed', 'archived')),
-  progress INTEGER DEFAULT 0 CHECK (progress BETWEEN 0 AND 100),
+  experience_level TEXT NOT NULL CHECK (experience_level IN ('beginner', 'intermediate', 'advanced')),
+  minutes_per_day INTEGER NOT NULL DEFAULT 30,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'completed', 'archived')),
+  progress INTEGER DEFAULT 0 CHECK (progress >= 0 AND progress <= 100),
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 ALTER TABLE public.learning_paths ENABLE ROW LEVEL SECURITY;
 
-DROP POLICY IF EXISTS "Users can view their own learning paths" ON public.learning_paths;
-CREATE POLICY "Users can view their own learning paths"
-  ON public.learning_paths FOR SELECT
-  USING (auth.uid() = user_id);
-
-DROP POLICY IF EXISTS "Users can insert their own learning paths" ON public.learning_paths;
-CREATE POLICY "Users can insert their own learning paths"
-  ON public.learning_paths FOR INSERT
-  WITH CHECK (auth.uid() = user_id);
-
-DROP POLICY IF EXISTS "Users can update their own learning paths" ON public.learning_paths;
-CREATE POLICY "Users can update their own learning paths"
-  ON public.learning_paths FOR UPDATE
-  USING (auth.uid() = user_id);
-
-DROP POLICY IF EXISTS "Users can delete their own learning paths" ON public.learning_paths;
-CREATE POLICY "Users can delete their own learning paths"
-  ON public.learning_paths FOR DELETE
+DROP POLICY IF EXISTS "Users can manage their own learning paths" ON public.learning_paths;
+CREATE POLICY "Users can manage their own learning paths"
+  ON public.learning_paths FOR ALL
   USING (auth.uid() = user_id);
 
 -- ------------------------------------------------------------
@@ -103,20 +81,15 @@ CREATE TABLE IF NOT EXISTS public.modules (
   learning_path_id UUID NOT NULL REFERENCES public.learning_paths(id) ON DELETE CASCADE,
   title TEXT NOT NULL,
   description TEXT,
-  module_order INTEGER DEFAULT 0,
-  status TEXT DEFAULT 'locked' CHECK (status IN ('completed', 'in_progress', 'locked')),
-  progress INTEGER DEFAULT 0 CHECK (progress BETWEEN 0 AND 100),
+  module_order INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'locked' CHECK (status IN ('completed', 'in_progress', 'locked')),
+  progress INTEGER DEFAULT 0 CHECK (progress >= 0 AND progress <= 100),
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 ALTER TABLE public.modules ENABLE ROW LEVEL SECURITY;
 
-DROP POLICY IF EXISTS "Users can manage modules of their learning paths" ON public.modules;
 DROP POLICY IF EXISTS "Users can view modules of their learning paths" ON public.modules;
-DROP POLICY IF EXISTS "Users can insert modules for their learning paths" ON public.modules;
-DROP POLICY IF EXISTS "Users can update modules of their learning paths" ON public.modules;
-DROP POLICY IF EXISTS "Users can delete modules of their learning paths" ON public.modules;
-
 CREATE POLICY "Users can view modules of their learning paths"
   ON public.modules FOR SELECT
   USING (
@@ -127,28 +100,9 @@ CREATE POLICY "Users can view modules of their learning paths"
     )
   );
 
-CREATE POLICY "Users can insert modules for their learning paths"
-  ON public.modules FOR INSERT
-  WITH CHECK (
-    EXISTS (
-      SELECT 1 FROM public.learning_paths
-      WHERE learning_paths.id = modules.learning_path_id
-      AND learning_paths.user_id = auth.uid()
-    )
-  );
-
-CREATE POLICY "Users can update modules of their learning paths"
-  ON public.modules FOR UPDATE
-  USING (
-    EXISTS (
-      SELECT 1 FROM public.learning_paths
-      WHERE learning_paths.id = modules.learning_path_id
-      AND learning_paths.user_id = auth.uid()
-    )
-  );
-
-CREATE POLICY "Users can delete modules of their learning paths"
-  ON public.modules FOR DELETE
+DROP POLICY IF EXISTS "Users can manage modules of their learning paths" ON public.modules;
+CREATE POLICY "Users can manage modules of their learning paths"
+  ON public.modules FOR ALL
   USING (
     EXISTS (
       SELECT 1 FROM public.learning_paths
@@ -164,22 +118,16 @@ CREATE TABLE IF NOT EXISTS public.lessons (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   module_id UUID NOT NULL REFERENCES public.modules(id) ON DELETE CASCADE,
   title TEXT NOT NULL,
-  description TEXT,
   content TEXT,
   estimated_minutes INTEGER DEFAULT 15,
-  lesson_order INTEGER DEFAULT 0,
-  status TEXT DEFAULT 'locked' CHECK (status IN ('completed', 'in_progress', 'locked')),
+  lesson_order INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'locked' CHECK (status IN ('completed', 'in_progress', 'locked')),
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 ALTER TABLE public.lessons ENABLE ROW LEVEL SECURITY;
 
-DROP POLICY IF EXISTS "Users can manage lessons of their learning paths" ON public.lessons;
 DROP POLICY IF EXISTS "Users can view lessons of their learning paths" ON public.lessons;
-DROP POLICY IF EXISTS "Users can insert lessons for their learning paths" ON public.lessons;
-DROP POLICY IF EXISTS "Users can update lessons of their learning paths" ON public.lessons;
-DROP POLICY IF EXISTS "Users can delete lessons of their learning paths" ON public.lessons;
-
 CREATE POLICY "Users can view lessons of their learning paths"
   ON public.lessons FOR SELECT
   USING (
@@ -191,30 +139,9 @@ CREATE POLICY "Users can view lessons of their learning paths"
     )
   );
 
-CREATE POLICY "Users can insert lessons for their learning paths"
-  ON public.lessons FOR INSERT
-  WITH CHECK (
-    EXISTS (
-      SELECT 1 FROM public.modules
-      JOIN public.learning_paths ON modules.learning_path_id = learning_paths.id
-      WHERE modules.id = lessons.module_id
-      AND learning_paths.user_id = auth.uid()
-    )
-  );
-
-CREATE POLICY "Users can update lessons of their learning paths"
-  ON public.lessons FOR UPDATE
-  USING (
-    EXISTS (
-      SELECT 1 FROM public.modules
-      JOIN public.learning_paths ON modules.learning_path_id = learning_paths.id
-      WHERE modules.id = lessons.module_id
-      AND learning_paths.user_id = auth.uid()
-    )
-  );
-
-CREATE POLICY "Users can delete lessons of their learning paths"
-  ON public.lessons FOR DELETE
+DROP POLICY IF EXISTS "Users can manage lessons of their learning paths" ON public.lessons;
+CREATE POLICY "Users can manage lessons of their learning paths"
+  ON public.lessons FOR ALL
   USING (
     EXISTS (
       SELECT 1 FROM public.modules
@@ -230,11 +157,11 @@ CREATE POLICY "Users can delete lessons of their learning paths"
 CREATE TABLE IF NOT EXISTS public.daily_tasks (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
-  learning_path_id UUID REFERENCES public.learning_paths(id) ON DELETE SET NULL,
+  learning_path_id UUID REFERENCES public.learning_paths(id) ON DELETE CASCADE,
   title TEXT NOT NULL,
-  xp_reward INTEGER DEFAULT 20,
-  completed BOOLEAN DEFAULT FALSE,
-  category TEXT DEFAULT 'reading' CHECK (category IN ('quiz', 'reading', 'tutor', 'research')),
+  xp_reward INTEGER DEFAULT 50,
+  completed BOOLEAN DEFAULT false,
+  category TEXT DEFAULT 'quiz' CHECK (category IN ('quiz', 'reading', 'tutor', 'research')),
   due_date DATE DEFAULT CURRENT_DATE,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -247,26 +174,84 @@ CREATE POLICY "Users can manage their own daily tasks"
   USING (auth.uid() = user_id);
 
 -- ------------------------------------------------------------
--- 6. QUIZ ATTEMPTS TABLE
+-- 6. STUDY NOTES TABLE
 -- ------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS public.quiz_attempts (
+CREATE TABLE IF NOT EXISTS public.study_notes (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
-  lesson_id UUID REFERENCES public.lessons(id) ON DELETE CASCADE,
-  score INTEGER NOT NULL,
-  total_questions INTEGER NOT NULL,
+  lesson_id UUID NOT NULL UNIQUE REFERENCES public.lessons(id) ON DELETE CASCADE,
+  overview TEXT NOT NULL,
+  explanation TEXT NOT NULL,
+  key_concepts JSONB NOT NULL DEFAULT '[]'::jsonb,
+  examples JSONB NOT NULL DEFAULT '[]'::jsonb,
+  important_points JSONB NOT NULL DEFAULT '[]'::jsonb,
+  quick_revision TEXT NOT NULL,
+  raw_markdown TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE public.study_notes ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Users can view study notes of their learning paths" ON public.study_notes;
+CREATE POLICY "Users can view study notes of their learning paths"
+  ON public.study_notes FOR SELECT
+  USING (
+    EXISTS (
+      SELECT 1 FROM public.lessons
+      JOIN public.modules ON lessons.module_id = modules.id
+      JOIN public.learning_paths ON modules.learning_path_id = learning_paths.id
+      WHERE lessons.id = study_notes.lesson_id
+      AND learning_paths.user_id = auth.uid()
+    )
+  );
+
+DROP POLICY IF EXISTS "Users can insert study notes for their learning paths" ON public.study_notes;
+CREATE POLICY "Users can insert study notes for their learning paths"
+  ON public.study_notes FOR INSERT
+  WITH CHECK (
+    EXISTS (
+      SELECT 1 FROM public.lessons
+      JOIN public.modules ON lessons.module_id = modules.id
+      JOIN public.learning_paths ON modules.learning_path_id = learning_paths.id
+      WHERE lessons.id = study_notes.lesson_id
+      AND learning_paths.user_id = auth.uid()
+    )
+  );
+
+-- ------------------------------------------------------------
+-- 7. LEARNING RESOURCES TABLE
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.learning_resources (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  lesson_id UUID NOT NULL REFERENCES public.lessons(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  resource_type TEXT NOT NULL,
+  url TEXT NOT NULL,
+  source TEXT,
+  description TEXT,
+  duration TEXT,
+  difficulty TEXT,
+  is_recommended BOOLEAN DEFAULT false,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-ALTER TABLE public.quiz_attempts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.learning_resources ENABLE ROW LEVEL SECURITY;
 
-DROP POLICY IF EXISTS "Users can manage their own quiz attempts" ON public.quiz_attempts;
-CREATE POLICY "Users can manage their own quiz attempts"
-  ON public.quiz_attempts FOR ALL
-  USING (auth.uid() = user_id);
+DROP POLICY IF EXISTS "Users can view resources for their learning paths" ON public.learning_resources;
+CREATE POLICY "Users can view resources for their learning paths"
+  ON public.learning_resources FOR SELECT
+  USING (
+    EXISTS (
+      SELECT 1 FROM public.lessons
+      JOIN public.modules ON lessons.module_id = modules.id
+      JOIN public.learning_paths ON modules.learning_path_id = learning_paths.id
+      WHERE lessons.id = learning_resources.lesson_id
+      AND learning_paths.user_id = auth.uid()
+    )
+  );
 
 -- ------------------------------------------------------------
--- 7. USER PROGRESS TABLE
+-- 8. USER PROGRESS TABLE
 -- ------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS public.user_progress (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -282,3 +267,176 @@ DROP POLICY IF EXISTS "Users can manage their own progress" ON public.user_progr
 CREATE POLICY "Users can manage their own progress"
   ON public.user_progress FOR ALL
   USING (auth.uid() = user_id);
+
+-- ------------------------------------------------------------
+-- 9. STAGE 12.1 — AI QUIZ & ASSESSMENT ENGINE SCHEMA
+-- ------------------------------------------------------------
+
+-- A. QUIZZES TABLE
+CREATE TABLE IF NOT EXISTS public.quizzes (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  lesson_id UUID NOT NULL REFERENCES public.lessons(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  description TEXT,
+  difficulty TEXT NOT NULL DEFAULT 'beginner' CHECK (difficulty IN ('beginner', 'intermediate', 'advanced')),
+  question_count INTEGER NOT NULL DEFAULT 5,
+  estimated_minutes INTEGER DEFAULT 5,
+  passing_score INTEGER DEFAULT 70,
+  version INTEGER DEFAULT 1,
+  generation_status TEXT DEFAULT 'ready' CHECK (generation_status IN ('generating', 'ready', 'failed')),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_quizzes_lesson_id ON public.quizzes(lesson_id);
+
+ALTER TABLE public.quizzes ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Users can view quizzes for their learning paths" ON public.quizzes;
+CREATE POLICY "Users can view quizzes for their learning paths"
+  ON public.quizzes FOR SELECT
+  USING (
+    EXISTS (
+      SELECT 1 FROM public.lessons
+      JOIN public.modules ON lessons.module_id = modules.id
+      JOIN public.learning_paths ON modules.learning_path_id = learning_paths.id
+      WHERE lessons.id = quizzes.lesson_id
+      AND learning_paths.user_id = auth.uid()
+    )
+  );
+
+DROP POLICY IF EXISTS "Users can insert quizzes for their learning paths" ON public.quizzes;
+CREATE POLICY "Users can insert quizzes for their learning paths"
+  ON public.quizzes FOR INSERT
+  WITH CHECK (
+    EXISTS (
+      SELECT 1 FROM public.lessons
+      JOIN public.modules ON lessons.module_id = modules.id
+      JOIN public.learning_paths ON modules.learning_path_id = learning_paths.id
+      WHERE lessons.id = quizzes.lesson_id
+      AND learning_paths.user_id = auth.uid()
+    )
+  );
+
+-- B. QUIZ QUESTIONS TABLE
+CREATE TABLE IF NOT EXISTS public.quiz_questions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  quiz_id UUID NOT NULL REFERENCES public.quizzes(id) ON DELETE CASCADE,
+  question_order INTEGER NOT NULL,
+  question_type TEXT NOT NULL DEFAULT 'multiple_choice' CHECK (question_type IN ('multiple_choice', 'true_false', 'multiple_select', 'fill_blank', 'short_answer', 'code', 'matching')),
+  question_text TEXT NOT NULL,
+  options JSONB NOT NULL DEFAULT '[]'::jsonb,
+  correct_answer JSONB NOT NULL, -- SERVER-SIDE SECURE ONLY
+  explanation TEXT NOT NULL,
+  concept TEXT,
+  difficulty TEXT,
+  points INTEGER DEFAULT 1,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_quiz_questions_quiz_id ON public.quiz_questions(quiz_id);
+
+ALTER TABLE public.quiz_questions ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Users can view questions for their quizzes" ON public.quiz_questions;
+CREATE POLICY "Users can view questions for their quizzes"
+  ON public.quiz_questions FOR SELECT
+  USING (
+    EXISTS (
+      SELECT 1 FROM public.quizzes
+      JOIN public.lessons ON quizzes.lesson_id = lessons.id
+      JOIN public.modules ON lessons.module_id = modules.id
+      JOIN public.learning_paths ON modules.learning_path_id = learning_paths.id
+      WHERE quizzes.id = quiz_questions.quiz_id
+      AND learning_paths.user_id = auth.uid()
+    )
+  );
+
+-- C. BROWSER-SAFE FUNCTION FOR FETCHING QUESTIONS WITHOUT CORRECT_ANSWER
+CREATE OR REPLACE FUNCTION public.get_safe_quiz_questions(p_quiz_id UUID)
+RETURNS TABLE (
+  id UUID,
+  quiz_id UUID,
+  question_order INT,
+  question_type TEXT,
+  question_text TEXT,
+  options JSONB,
+  concept TEXT,
+  difficulty TEXT,
+  points INT
+) SECURITY DEFINER LANGUAGE plpgsql AS $$
+BEGIN
+  RETURN QUERY
+  SELECT
+    qq.id,
+    qq.quiz_id,
+    qq.question_order,
+    qq.question_type,
+    qq.question_text,
+    qq.options,
+    qq.concept,
+    qq.difficulty,
+    qq.points
+  FROM public.quiz_questions qq
+  WHERE qq.quiz_id = p_quiz_id
+  ORDER BY qq.question_order ASC;
+END;
+$$;
+
+-- D. EXTEND QUIZ ATTEMPTS TABLE (SAFELY ADD MISSING COLUMNS IF NOT EXISTS)
+CREATE TABLE IF NOT EXISTS public.quiz_attempts (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+  lesson_id UUID REFERENCES public.lessons(id) ON DELETE CASCADE,
+  score INTEGER NOT NULL DEFAULT 0,
+  total_questions INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE public.quiz_attempts ADD COLUMN IF NOT EXISTS quiz_id UUID REFERENCES public.quizzes(id) ON DELETE CASCADE;
+ALTER TABLE public.quiz_attempts ADD COLUMN IF NOT EXISTS percentage INTEGER DEFAULT 0;
+ALTER TABLE public.quiz_attempts ADD COLUMN IF NOT EXISTS correct_answers INTEGER DEFAULT 0;
+ALTER TABLE public.quiz_attempts ADD COLUMN IF NOT EXISTS passed BOOLEAN DEFAULT false;
+ALTER TABLE public.quiz_attempts ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE public.quiz_attempts ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ;
+ALTER TABLE public.quiz_attempts ADD COLUMN IF NOT EXISTS duration_seconds INTEGER DEFAULT 0;
+ALTER TABLE public.quiz_attempts ADD COLUMN IF NOT EXISTS xp_awarded INTEGER DEFAULT 0;
+
+CREATE INDEX IF NOT EXISTS idx_quiz_attempts_user_id ON public.quiz_attempts(user_id);
+CREATE INDEX IF NOT EXISTS idx_quiz_attempts_quiz_id ON public.quiz_attempts(quiz_id);
+CREATE INDEX IF NOT EXISTS idx_quiz_attempts_lesson_id ON public.quiz_attempts(lesson_id);
+
+ALTER TABLE public.quiz_attempts ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Users can manage their own quiz attempts" ON public.quiz_attempts;
+CREATE POLICY "Users can manage their own quiz attempts"
+  ON public.quiz_attempts FOR ALL
+  USING (auth.uid() = user_id);
+
+-- E. QUIZ ANSWERS TABLE
+CREATE TABLE IF NOT EXISTS public.quiz_answers (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  attempt_id UUID NOT NULL REFERENCES public.quiz_attempts(id) ON DELETE CASCADE,
+  question_id UUID NOT NULL REFERENCES public.quiz_questions(id) ON DELETE CASCADE,
+  selected_answer JSONB,
+  is_correct BOOLEAN,
+  points_earned INTEGER DEFAULT 0,
+  answered_at TIMESTAMPTZ DEFAULT NOW(),
+  CONSTRAINT unique_attempt_question UNIQUE (attempt_id, question_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_quiz_answers_attempt_id ON public.quiz_answers(attempt_id);
+CREATE INDEX IF NOT EXISTS idx_quiz_answers_question_id ON public.quiz_answers(question_id);
+
+ALTER TABLE public.quiz_answers ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Users can manage answers for their attempts" ON public.quiz_answers;
+CREATE POLICY "Users can manage answers for their attempts"
+  ON public.quiz_answers FOR ALL
+  USING (
+    EXISTS (
+      SELECT 1 FROM public.quiz_attempts
+      WHERE quiz_attempts.id = quiz_answers.attempt_id
+      AND quiz_attempts.user_id = auth.uid()
+    )
+  );

@@ -4,7 +4,7 @@ export type Json =
   | boolean
   | null
   | { [key: string]: Json | undefined }
-  | Json[]
+  | Json[];
 
 export interface Profile {
   id: string;
@@ -70,9 +70,17 @@ export interface DailyTaskRecord {
 export interface QuizAttemptRecord {
   id: string;
   user_id: string;
+  quiz_id?: string | null;
   lesson_id?: string | null;
   score: number;
+  percentage?: number;
   total_questions: number;
+  correct_answers?: number;
+  passed?: boolean;
+  started_at?: string;
+  completed_at?: string | null;
+  duration_seconds?: number;
+  xp_awarded?: number;
   created_at?: string;
 }
 
@@ -82,3 +90,5 @@ export interface UserProgressRecord {
   lesson_id: string;
   completed_at?: string;
 }
+
+export * from './quiz';
