@@ -354,7 +354,7 @@ RETURNS TABLE (
   concept TEXT,
   difficulty TEXT,
   points INT
-) SECURITY DEFINER LANGUAGE plpgsql AS $$
+) SECURITY DEFINER SET search_path = public LANGUAGE plpgsql AS $$
 BEGIN
   -- Verify ownership: requesting user must own the learning_path containing this quiz
   IF NOT EXISTS (
@@ -384,6 +384,10 @@ BEGIN
   ORDER BY qq.question_order ASC;
 END;
 $$;
+
+-- RESTRICT EXECUTION TO AUTHENTICATED USERS ONLY
+REVOKE ALL ON FUNCTION public.get_safe_quiz_questions(UUID) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.get_safe_quiz_questions(UUID) TO authenticated;
 
 -- D. EXTEND QUIZ ATTEMPTS TABLE (SAFELY ALTER EXISTING TABLE ONLY)
 ALTER TABLE public.quiz_attempts ADD COLUMN IF NOT EXISTS quiz_id UUID REFERENCES public.quizzes(id) ON DELETE CASCADE;
