@@ -144,8 +144,8 @@ export async function POST(request: Request) {
     console.log(`[GENERATE QUIZ] Generating AI quiz for lesson: "${lessonRecord.title}"`);
     const provider = getAIProvider();
 
-    const studyNotes = Array.isArray(lessonRecord.study_notes) 
-      ? lessonRecord.study_notes[0] 
+    const studyNotes = Array.isArray(lessonRecord.study_notes)
+      ? lessonRecord.study_notes[0]
       : lessonRecord.study_notes;
 
     const derivedDesc = studyNotes?.overview || (lessonRecord.content ? lessonRecord.content.split('\n')[0].replace(/^#+\s*/, '') : '');
@@ -261,8 +261,10 @@ export async function POST(request: Request) {
       return NextResponse.json(
         {
           success: false,
-          error: 'Failed to persist quiz questions to database.',
-          code: 'DB_SAVE_FAILED',
+          error: questionsInsertErr.message,
+          details: questionsInsertErr.details,
+          hint: questionsInsertErr.hint,
+          code: questionsInsertErr.code,
         },
         { status: 500 }
       );

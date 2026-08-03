@@ -70,6 +70,20 @@ CREATE INDEX IF NOT EXISTS idx_quiz_questions_quiz_id ON public.quiz_questions(q
 
 ALTER TABLE public.quiz_questions ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "Users can insert questions for their quizzes" ON public.quiz_questions;
+CREATE POLICY "Users can insert questions for their quizzes"
+  ON public.quiz_questions FOR INSERT
+  WITH CHECK (
+    EXISTS (
+      SELECT 1 FROM public.quizzes
+      JOIN public.lessons ON quizzes.lesson_id = lessons.id
+      JOIN public.modules ON lessons.module_id = modules.id
+      JOIN public.learning_paths ON modules.learning_path_id = learning_paths.id
+      WHERE quizzes.id = quiz_questions.quiz_id
+      AND learning_paths.user_id = auth.uid()
+    )
+  );
+
 -- 3. BROWSER-SAFE RPC FUNCTION FOR FETCHING QUESTIONS (SECURE & OWNERSHIP VERIFIED)
 CREATE OR REPLACE FUNCTION public.get_safe_quiz_questions(p_quiz_id UUID)
 RETURNS TABLE (
