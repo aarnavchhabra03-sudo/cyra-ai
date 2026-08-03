@@ -1,240 +1,302 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Award, 
-  CheckCircle, 
-  XCircle, 
   HelpCircle, 
-  ChevronRight, 
-  RotateCcw,
-  Sparkles,
-  ArrowRight,
-  MessageSquare
+  Sparkles, 
+  ArrowRight, 
+  Clock, 
+  Target, 
+  FileQuestion,
+  Loader2,
+  AlertCircle,
+  BookOpen
 } from 'lucide-react';
-import { Quiz, QuizQuestion } from '@/data/mockData';
+import { QuizRecord, SafeQuizQuestion } from '@/types/quiz';
+import { createClient } from '@/lib/supabase/client';
 
 interface QuizTabProps {
-  quizzes: Quiz[];
-  onCompleteQuiz: (scorePercent: number, xpReward: number) => void;
-  onSwitchTab: (tabName: 'roadmap' | 'notes' | 'resources' | 'quiz' | 'tutor') => void;
+  activeNodeId?: string;
+  nodeList?: Array<{ id: string; title: string; status: 'completed' | 'in_progress' | 'locked' }>;
+  onSelectNode?: (id: string) => void;
+  onSwitchTab?: (tabName: 'roadmap' | 'notes' | 'resources' | 'quiz' | 'tutor') => void;
+  onCompleteQuiz?: (scorePercent: number, xpReward: number) => void;
 }
 
-export default function QuizTab({ quizzes, onCompleteQuiz, onSwitchTab }: QuizTabProps) {
-  const activeQuiz = quizzes[0]; // Take the first mock quiz
+export default function QuizTab({ 
+  activeNodeId, 
+  nodeList, 
+  onSelectNode, 
+  onSwitchTab, 
+  onCompleteQuiz 
+}: QuizTabProps) {
+  const [loading, setLoading] = useState<boolean>(true);
+  const [generating, setGenerating] = useState<boolean>(false);
+  const [quiz, setQuiz] = useState<QuizRecord | null>(null);
+  const [questions, setQuestions] = useState<SafeQuizQuestion[]>([]);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  // Quiz States
-  const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
-  const [selectedOptionIndex, setSelectedOptionIndex] = useState<number | null>(null);
-  const [isAnswerSubmitted, setIsAnswerSubmitted] = useState(false);
-  const [numberCorrect, setNumberCorrect] = useState(0);
-  const [isQuizCompleted, setIsQuizCompleted] = useState(false);
-
-  const question = activeQuiz.questions[currentQuestionIndex];
-
-  const handleSelectOption = (index: number) => {
-    if (isAnswerSubmitted) return;
-    setSelectedOptionIndex(index);
-  };
-
-  const handleSubmitAnswer = () => {
-    if (selectedOptionIndex === null || isAnswerSubmitted) return;
-
-    setIsAnswerSubmitted(true);
-    if (selectedOptionIndex === question.correctIndex) {
-      setNumberCorrect(prev => prev + 1);
+  // Check if a quiz already exists for the selected activeNodeId
+  useEffect(() => {
+    if (!activeNodeId) {
+      setLoading(false);
+      return;
     }
-  };
 
-  const handleNextQuestion = () => {
-    // Check if we have more questions
-    if (currentQuestionIndex < activeQuiz.questions.length - 1) {
-      setCurrentQuestionIndex(prev => prev + 1);
-      setSelectedOptionIndex(null);
-      setIsAnswerSubmitted(false);
-    } else {
-      // Quiz complete!
-      setIsQuizCompleted(true);
-      const scorePercent = Math.round((numberCorrect / activeQuiz.questions.length) * 100);
-      const xpReward = scorePercent >= 60 ? 50 : 10; // Earn XP!
-      onCompleteQuiz(scorePercent, xpReward);
+    let isSubscribed = true;
+
+    async function checkQuizCache() {
+      setLoading(true);
+      setErrorMsg(null);
+
+      try {
+        const supabase = createClient();
+        
+        // 1. Query Supabase quizzes for activeNodeId
+        const { data: existingQuiz, error: quizErr } = await supabase
+          .from('quizzes')
+          .select('*')
+          .eq('lesson_id', activeNodeId)
+          .eq('version', 1)
+          .maybeSingle();
+
+        if (quizErr) {
+          console.warn('[QUIZ TAB] Error fetching quiz cache:', quizErr);
+        }
+
+        if (existingQuiz && isSubscribed) {
+          setQuiz(existingQuiz as QuizRecord);
+
+          // 2. Fetch browser-safe questions via RPC
+          const { data: safeQuestions, error: rpcErr } = await supabase.rpc('get_safe_quiz_questions', {
+            p_quiz_id: existingQuiz.id
+          });
+
+          if (!rpcErr && safeQuestions && isSubscribed) {
+            setQuestions(safeQuestions as SafeQuizQuestion[]);
+          }
+        } else if (isSubscribed) {
+          setQuiz(null);
+          setQuestions([]);
+        }
+      } catch (err) {
+        console.error('[QUIZ TAB] Unexpected cache check error:', err);
+      } finally {
+        if (isSubscribed) {
+          setLoading(false);
+        }
+      }
     }
-  };
 
-  const handleRetake = () => {
-    setCurrentQuestionIndex(0);
-    setSelectedOptionIndex(null);
-    setIsAnswerSubmitted(false);
-    setNumberCorrect(0);
-    setIsQuizCompleted(false);
+    checkQuizCache();
+
+    return () => {
+      isSubscribed = false;
+    };
+  }, [activeNodeId]);
+
+  const handleGenerateQuiz = async () => {
+    if (!activeNodeId || generating) return;
+
+    setGenerating(true);
+    setErrorMsg(null);
+
+    try {
+      const res = await fetch('/api/ai/generate-quiz', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lessonId: activeNodeId }),
+      });
+
+      const result = await res.json();
+
+      if (!res.ok || !result.success) {
+        throw new Error(result.error || 'Failed to generate quiz.');
+      }
+
+      setQuiz(result.data.quiz);
+      setQuestions(result.data.questions || []);
+    } catch (err: any) {
+      console.error('[QUIZ TAB] Quiz generation error:', err);
+      setErrorMsg(err.message || 'An unexpected error occurred while generating the quiz.');
+    } finally {
+      setGenerating(false);
+    }
   };
 
   return (
-    <div className="max-w-2xl mx-auto">
+    <div className="max-w-3xl mx-auto space-y-6">
       
-      {/* 1. QUIZ COMPLETED SCREEN */}
-      {isQuizCompleted ? (
-        <div className="p-8 rounded-2xl glass-panel border border-zinc-800/80 text-center space-y-6 shadow-xl animate-fade-in">
-          <div className="w-16 h-16 rounded-full bg-gradient-to-tr from-indigo-500 to-cyan-400 p-[1.5px] mx-auto shadow-[0_0_20px_rgba(99,102,241,0.25)] flex items-center justify-center">
-            <div className="w-full h-full bg-zinc-950 rounded-full flex items-center justify-center">
-              <Award className="w-8 h-8 text-cyan-400 animate-bounce" />
+      {/* 1. LESSON SELECTOR / TOPIC OUTLINE (IF NODES PROVIDED) */}
+      {nodeList && nodeList.length > 0 && onSelectNode && (
+        <div className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-none">
+          <span className="text-[10px] font-mono uppercase tracking-wider text-zinc-500 flex items-center gap-1.5 flex-shrink-0 mr-1">
+            <BookOpen className="w-3.5 h-3.5 text-cyan-400" />
+            Select Lesson:
+          </span>
+          {nodeList.map((node) => {
+            const isSelected = node.id === activeNodeId;
+            const isLocked = node.status === 'locked';
+
+            return (
+              <button
+                key={node.id}
+                onClick={() => !isLocked && onSelectNode(node.id)}
+                disabled={isLocked}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all duration-200 flex items-center gap-1.5 flex-shrink-0 ${
+                  isSelected
+                    ? 'bg-gradient-to-r from-indigo-500/20 to-cyan-500/20 border border-indigo-500/40 text-white shadow-[0_0_12px_rgba(99,102,241,0.15)]'
+                    : isLocked
+                    ? 'bg-zinc-900/30 border border-zinc-900 text-zinc-600 cursor-not-allowed'
+                    : 'bg-zinc-900/60 border border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:border-zinc-700'
+                }`}
+              >
+                <span className="truncate max-w-[160px]">{node.title}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {/* 2. LOADING SKELETON */}
+      {loading ? (
+        <div className="p-8 rounded-2xl glass-panel border border-zinc-800/80 text-center space-y-4 animate-pulse">
+          <div className="w-12 h-12 rounded-xl bg-zinc-900 mx-auto flex items-center justify-center">
+            <Loader2 className="w-6 h-6 text-indigo-400 animate-spin" />
+          </div>
+          <p className="text-xs text-zinc-400 font-mono">Checking quiz availability...</p>
+        </div>
+      ) : generating ? (
+
+        /* 3. GENERATING AI ANIMATED STATE */
+        <div className="p-10 rounded-2xl glass-panel border border-indigo-500/30 text-center space-y-6 shadow-2xl relative overflow-hidden">
+          <div className="absolute inset-0 bg-gradient-to-r from-indigo-500/5 via-cyan-500/10 to-transparent animate-pulse" />
+          
+          <div className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-indigo-500 to-cyan-400 p-[1.5px] mx-auto shadow-[0_0_25px_rgba(99,102,241,0.3)]">
+            <div className="w-full h-full bg-zinc-950 rounded-[14px] flex items-center justify-center">
+              <Sparkles className="w-8 h-8 text-cyan-400 animate-spin" style={{ animationDuration: '4s' }} />
             </div>
           </div>
 
-          <div className="space-y-1">
-            <h3 className="text-xl font-bold text-white tracking-wide">Quiz Completed!</h3>
-            <p className="text-xs text-zinc-400 font-mono">Module 2: Memory & Paging Basics</p>
-          </div>
-
-          {/* Results Badge Grid */}
-          <div className="grid grid-cols-2 gap-4 max-w-sm mx-auto">
-            <div className="bg-zinc-900/50 p-4 rounded-xl border border-zinc-900 text-center">
-              <span className="text-[10px] font-mono text-zinc-500 block uppercase">Final Score</span>
-              <span className="text-2xl font-bold text-white font-mono">
-                {numberCorrect} / {activeQuiz.questions.length}
-              </span>
-              <span className="text-[10px] text-cyan-400 font-semibold block mt-1">
-                {Math.round((numberCorrect / activeQuiz.questions.length) * 100)}% Accuracy
-              </span>
-            </div>
-
-            <div className="bg-zinc-900/50 p-4 rounded-xl border border-zinc-900 text-center flex flex-col justify-center items-center">
-              <span className="text-[10px] font-mono text-zinc-500 block uppercase">XP Rewarded</span>
-              <span className="text-2xl font-bold text-indigo-400 font-mono">
-                +{Math.round((numberCorrect / activeQuiz.questions.length) * 100) >= 60 ? 50 : 10} XP
-              </span>
-              <span className="text-[9px] text-zinc-500 mt-1 block">Level progress saved</span>
-            </div>
-          </div>
-
-          {/* CTA actions */}
-          <div className="flex gap-3 max-w-md mx-auto pt-4">
-            <button
-              onClick={handleRetake}
-              className="flex-1 py-2.5 px-4 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-300 hover:text-white hover:bg-zinc-800/80 transition-all text-xs font-semibold flex items-center justify-center gap-1.5"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-              Retake Quiz
-            </button>
-
-            <button
-              onClick={() => onSwitchTab('tutor')}
-              className="flex-1 py-2.5 px-4 rounded-xl bg-gradient-to-r from-indigo-500 to-cyan-500 hover:from-indigo-600 hover:to-cyan-600 text-white font-semibold text-xs flex items-center justify-center gap-2 transition-all duration-200"
-            >
-              <MessageSquare className="w-3.5 h-3.5" />
-              Discuss with Tutor
-            </button>
+          <div className="space-y-2 relative z-10">
+            <h3 className="text-lg font-bold text-white tracking-wide">Generating Adaptive Quiz...</h3>
+            <p className="text-xs text-zinc-400 max-w-md mx-auto leading-relaxed">
+              CYRA is analyzing lesson content, key concepts, and study notes to construct a tailored assessment.
+            </p>
           </div>
         </div>
-      ) : (
-        
-        // 2. ACTIVE QUIZ PLAYBACK SCREEN
-        <div className="space-y-6">
-          
-          {/* Quiz Stats Header */}
-          <div className="flex justify-between items-center bg-zinc-900/40 p-4 rounded-xl border border-zinc-900/60">
-            <div className="flex items-center gap-2 text-zinc-300">
-              <HelpCircle className="w-4 h-4 text-cyan-400" />
-              <span className="text-xs font-bold truncate">{activeQuiz.title}</span>
-            </div>
-            <span className="text-[10px] font-mono bg-zinc-950 px-2 py-0.5 rounded border border-zinc-800 text-zinc-400">
-              QUESTION {currentQuestionIndex + 1} OF {activeQuiz.questions.length}
-            </span>
+      ) : !quiz ? (
+
+        /* 4. EMPTY STATE: NO QUIZ GENERATED YET */
+        <div className="p-10 rounded-2xl glass-panel border border-zinc-800/80 text-center space-y-6 shadow-xl">
+          <div className="w-16 h-16 rounded-2xl bg-zinc-900/80 border border-zinc-800 flex items-center justify-center mx-auto text-zinc-400">
+            <FileQuestion className="w-8 h-8 text-indigo-400" />
           </div>
 
-          {/* Quiz Question Card */}
-          <div className="p-6 rounded-2xl glass-panel border border-zinc-800/80 space-y-6">
-            
-            {/* Question Text */}
-            <h3 className="text-sm font-bold text-white leading-relaxed">
-              {question.question}
-            </h3>
+          <div className="space-y-2">
+            <h3 className="text-lg font-bold text-white tracking-wide">No Quiz Generated Yet</h3>
+            <p className="text-xs text-zinc-400 max-w-md mx-auto leading-relaxed">
+              No assessment pack has been generated for this lesson. Click below to generate an AI-powered quiz tailored strictly to this lesson&apos;s concepts.
+            </p>
+          </div>
 
-            {/* Answer Options Grid */}
-            <div className="space-y-3">
-              {question.options.map((option, idx) => {
-                // Formatting states
-                let optionStyle = "border-zinc-850 bg-zinc-900/30 text-zinc-300 hover:bg-zinc-800/20 hover:border-zinc-700/60";
-                
-                if (selectedOptionIndex === idx) {
-                  optionStyle = "border-indigo-500/50 bg-indigo-950/15 text-indigo-200";
-                }
+          {errorMsg && (
+            <div className="p-3.5 rounded-xl bg-red-950/30 border border-red-900/50 text-red-300 text-xs flex items-center gap-2 max-w-md mx-auto">
+              <AlertCircle className="w-4 h-4 flex-shrink-0 text-red-400" />
+              <span>{errorMsg}</span>
+            </div>
+          )}
 
-                if (isAnswerSubmitted) {
-                  if (idx === question.correctIndex) {
-                    optionStyle = "border-emerald-500/60 bg-emerald-950/20 text-emerald-200";
-                  } else if (selectedOptionIndex === idx) {
-                    optionStyle = "border-red-500/60 bg-red-950/20 text-red-200";
-                  } else {
-                    optionStyle = "border-zinc-900 bg-zinc-950/30 text-zinc-500 opacity-60";
-                  }
-                }
+          <button
+            onClick={handleGenerateQuiz}
+            className="py-3 px-6 rounded-xl bg-gradient-to-r from-indigo-500 to-cyan-500 hover:from-indigo-600 hover:to-cyan-600 text-white font-semibold text-xs transition-all duration-200 shadow-lg shadow-indigo-500/20 inline-flex items-center gap-2"
+          >
+            <Sparkles className="w-4 h-4" />
+            Generate Quiz
+          </button>
+        </div>
+      ) : (
 
-                return (
-                  <div
-                    key={idx}
-                    onClick={() => handleSelectOption(idx)}
-                    className={`p-3.5 rounded-xl border text-xs font-medium cursor-pointer transition-all duration-200 flex items-start gap-3.5 ${optionStyle}`}
-                  >
-                    <div className={`w-5 h-5 rounded-full flex items-center justify-center font-mono text-[10px] border flex-shrink-0 ${
-                      selectedOptionIndex === idx 
-                        ? 'border-indigo-400 bg-indigo-500/10 text-indigo-300' 
-                        : 'border-zinc-800 bg-zinc-950/60 text-zinc-500'
-                    }`}>
-                      {String.fromCharCode(65 + idx)}
-                    </div>
-                    <span>{option}</span>
-                  </div>
-                );
-              })}
+        /* 5. PERSISTED QUIZ OVERVIEW CARD */
+        <div className="p-8 rounded-2xl glass-panel border border-zinc-800/80 space-y-6 shadow-xl animate-fade-in">
+          
+          {/* Header & Badges */}
+          <div className="space-y-3 border-b border-zinc-900 pb-5">
+            <div className="flex items-center justify-between gap-4 flex-wrap">
+              <div className="flex items-center gap-2">
+                <span className="p-1.5 rounded-lg bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+                  <HelpCircle className="w-4 h-4" />
+                </span>
+                <span className="text-xs font-mono font-bold uppercase tracking-wider text-cyan-400">
+                  AI Quiz Ready
+                </span>
+              </div>
+
+              {/* Difficulty Badge */}
+              <span className="text-[10px] font-mono font-bold uppercase px-2.5 py-1 rounded-md bg-zinc-900 border border-zinc-800 text-zinc-300">
+                {quiz.difficulty} Level
+              </span>
             </div>
 
-            {/* AI Explanation Accordion (Visible after submission) */}
-            {isAnswerSubmitted && (
-              <div className="p-4 rounded-xl bg-zinc-950/60 border border-zinc-900/80 space-y-2.5 animate-fade-in">
-                <div className="flex items-center gap-2">
-                  <div className="p-1 rounded-md bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
-                    <Sparkles className="w-3.5 h-3.5" />
-                  </div>
-                  <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-zinc-200">
-                    CYRA AI Explanation
-                  </span>
-                </div>
-                <p className="text-[11px] text-zinc-400 leading-relaxed">
-                  {question.explanation}
-                </p>
-              </div>
-            )}
+            <h2 className="text-xl font-bold text-white tracking-tight">{quiz.title}</h2>
+            <p className="text-xs text-zinc-400 leading-relaxed max-w-2xl">{quiz.description}</p>
+          </div>
 
-            {/* Progress bar */}
-            <div className="w-full bg-zinc-950 h-1.5 rounded-full overflow-hidden border border-zinc-900">
-              <div 
-                className="h-full bg-indigo-500 transition-all duration-300"
-                style={{ width: `${((currentQuestionIndex + (isAnswerSubmitted ? 1 : 0)) / activeQuiz.questions.length) * 100}%` }}
-              />
+          {/* Key Assessment Specs */}
+          <div className="grid grid-cols-3 gap-4">
+            <div className="bg-zinc-900/40 p-4 rounded-xl border border-zinc-900/80 flex items-center gap-3">
+              <div className="p-2 rounded-lg bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
+                <FileQuestion className="w-4 h-4" />
+              </div>
+              <div>
+                <span className="text-[10px] font-mono text-zinc-500 block uppercase">Questions</span>
+                <span className="text-sm font-bold text-white font-mono">
+                  {questions.length || quiz.question_count} Questions
+                </span>
+              </div>
+            </div>
+
+            <div className="bg-zinc-900/40 p-4 rounded-xl border border-zinc-900/80 flex items-center gap-3">
+              <div className="p-2 rounded-lg bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+                <Clock className="w-4 h-4" />
+              </div>
+              <div>
+                <span className="text-[10px] font-mono text-zinc-500 block uppercase">Est. Time</span>
+                <span className="text-sm font-bold text-white font-mono">
+                  {quiz.estimated_minutes} Minutes
+                </span>
+              </div>
+            </div>
+
+            <div className="bg-zinc-900/40 p-4 rounded-xl border border-zinc-900/80 flex items-center gap-3">
+              <div className="p-2 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                <Target className="w-4 h-4" />
+              </div>
+              <div>
+                <span className="text-[10px] font-mono text-zinc-500 block uppercase">Passing Score</span>
+                <span className="text-sm font-bold text-white font-mono">
+                  {quiz.passing_score}% Score
+                </span>
+              </div>
             </div>
           </div>
 
           {/* Action Row */}
-          <div className="flex justify-end">
-            {!isAnswerSubmitted ? (
-              <button
-                onClick={handleSubmitAnswer}
-                disabled={selectedOptionIndex === null}
-                className="py-2.5 px-6 rounded-xl bg-indigo-500 hover:bg-indigo-600 disabled:opacity-50 disabled:pointer-events-none text-white font-semibold text-xs transition-colors flex items-center gap-1.5 shadow-md shadow-indigo-500/15"
-              >
-                Submit Answer
-                <ChevronRight className="w-4 h-4" />
-              </button>
-            ) : (
-              <button
-                onClick={handleNextQuestion}
-                className="py-2.5 px-6 rounded-xl bg-gradient-to-r from-indigo-500 to-cyan-500 hover:from-indigo-600 hover:to-cyan-600 text-white font-semibold text-xs transition-all flex items-center gap-1.5 shadow-md shadow-indigo-500/15"
-              >
-                {currentQuestionIndex === activeQuiz.questions.length - 1 ? 'Finish Quiz' : 'Next Question'}
-                <ArrowRight className="w-3.5 h-3.5 animate-pulse" />
-              </button>
-            )}
+          <div className="pt-2 flex items-center justify-between border-t border-zinc-900">
+            <span className="text-[11px] text-zinc-500 italic">
+              Clicking Start Quiz launches the interactive assessment engine.
+            </span>
+
+            <button
+              onClick={() => {
+                alert('Quiz-taking engine will be activated in Stage 12.3!');
+              }}
+              className="py-3 px-7 rounded-xl bg-gradient-to-r from-indigo-500 to-cyan-500 hover:from-indigo-600 hover:to-cyan-600 text-white font-semibold text-xs transition-all duration-200 shadow-lg shadow-indigo-500/20 inline-flex items-center gap-2"
+            >
+              Start Quiz
+              <ArrowRight className="w-4 h-4" />
+            </button>
           </div>
         </div>
       )}

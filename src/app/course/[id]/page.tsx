@@ -122,7 +122,7 @@ export default function CourseWorkspace() {
         {activeTab === 'roadmap'   && <RoadmapTab   modules={course.modules} onSelectNode={id => setActiveNodeId(id)} onSwitchTab={switchTab} />}
         {activeTab === 'notes'     && <NotesTab     notes={course.notes} activeNodeId={activeNodeId} nodeList={allNodes} onSelectNode={setActiveNodeId} onAskTutorAboutNote={t => { setTutorCtx(t); setActiveTab('tutor'); }} />}
         {activeTab === 'resources' && <ResourcesTab activeNodeId={activeNodeId} nodeList={allNodes} onSelectNode={setActiveNodeId} />}
-        {activeTab === 'quiz'      && <QuizTab      quizzes={course.quizzes} onCompleteQuiz={pct => { if (pct >= 60) setProgress(p => Math.min(100, p + 15)); }} onSwitchTab={switchTab} />}
+        {activeTab === 'quiz'      && <QuizTab      activeNodeId={activeNodeId} nodeList={allNodes} onSelectNode={setActiveNodeId} onCompleteQuiz={(pct, xp) => { if (pct >= 60) setProgress(p => Math.min(100, p + 15)); }} onSwitchTab={switchTab} />}
         {activeTab === 'tutor'     && <TutorTab     initialContext={tutorCtx} />}
       </div>
     </div>

@@ -327,7 +327,15 @@ export default function CourseWorkspace() {
             onSelectNode={setActiveNodeId}
           />
         )}
-        {activeTab === 'quiz' && <QuizTab quizzes={mockOSCourseDetail.quizzes} onCompleteQuiz={pct => { if (pct >= 60) setProgress(p => Math.min(100, p + 15)); }} onSwitchTab={switchTab} />}
+        {activeTab === 'quiz' && (
+          <QuizTab
+            activeNodeId={activeNodeId}
+            nodeList={allNodes}
+            onSelectNode={setActiveNodeId}
+            onSwitchTab={switchTab}
+            onCompleteQuiz={(pct, xp) => { if (pct >= 60) setProgress(p => Math.min(100, p + 15)); }}
+          />
+        )}
         {activeTab === 'tutor' && <TutorTab initialContext={tutorCtx} />}
       </div>
     </div>

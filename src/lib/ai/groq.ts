@@ -10,7 +10,10 @@ import {
   StudyNotesData,
   GenerateResourcePlanOptions,
   AIResourcePlanResponse,
-  ResourcePlanData
+  ResourcePlanData,
+  GenerateQuizOptions,
+  AIQuizResponse,
+  GeneratedQuizData
 } from './types';
 import { validateLearningPath, LearningPathGeneration } from '@/types/ai';
 
@@ -47,92 +50,97 @@ export function validateResourcePlan(data: any): data is ResourcePlanData {
   return true;
 }
 
-const SYSTEM_CURRICULUM_ARCHITECT_INSTRUCTION = `You are CYRA AI, an elite curriculum architect and master educator.
-Your sole mission is to synthesize deeply tailored, highly personalized, and structurally distinct learning paths.
+export function validateQuizData(data: any): data is GeneratedQuizData {
+  if (!data || typeof data !== 'object') return false;
+  if (!data.quiz || typeof data.quiz !== 'object') return false;
 
-CRITICAL MANDATE:
-The curriculum MUST change SIGNIFICANTLY in structure, module selection, lesson depth, exercise type, and pacing based on the user's experience level, learning goal, daily study commitment, target date, and subject category.
+  const { title, description, difficulty, estimated_minutes, passing_score } = data.quiz;
+  if (typeof title !== 'string' || !title.trim()) return false;
+  if (typeof description !== 'string' || !description.trim()) return false;
+  if (!['beginner', 'intermediate', 'advanced'].includes(String(difficulty).toLowerCase())) return false;
+  if (typeof estimated_minutes !== 'number' || estimated_minutes <= 0) return false;
+  if (typeof passing_score !== 'number' || passing_score <= 0 || passing_score > 100) return false;
 
-==================================================
-JSON RESPONSE SCHEMA (STRICT REQUIREMENT)
-==================================================
-You MUST respond strictly with a valid raw JSON object (NO markdown codeblock wrappers like \`\`\`json):
+  if (!Array.isArray(data.questions) || data.questions.length < 5 || data.questions.length > 10) return false;
 
-{
-  "title": "Clear, compelling, highly customized title for the learning path",
-  "description": "Comprehensive 2-3 sentence overview explaining how this curriculum specifically achieves the user's unique experience level and learning goal",
-  "difficulty": "beginner" | "intermediate" | "advanced",
-  "estimatedWeeks": number (positive integer),
-  "weeklyHours": number (positive integer),
-  "prerequisites": ["List of prerequisite concepts or skills matching user's starting point"],
-  "learningOutcomes": ["Key measurable skill outcomes the student will master"],
-  "modules": [
-    {
-      "title": "Module 1: Title",
-      "description": "Module overview focusing on target objectives and goal alignment",
-      "order": 1,
-      "estimatedHours": number (positive integer),
-      "objectives": ["Specific module learning objectives"],
-      "lessons": [
-        {
-          "title": "Lesson 1.1: Title",
-          "description": "Detailed lesson summary and scope",
-          "order": 1,
-          "estimatedMinutes": number (positive integer),
-          "keyConcepts": ["Key concept 1", "Key concept 2"]
-        }
-      ]
+  const seenOrders = new Set<number>();
+
+  for (const q of data.questions) {
+    if (!q || typeof q !== 'object') return false;
+    if (typeof q.question_order !== 'number' || seenOrders.has(q.question_order)) return false;
+    seenOrders.add(q.question_order);
+
+    const type = String(q.question_type).toLowerCase();
+    if (!['multiple_choice', 'true_false'].includes(type)) return false;
+
+    if (typeof q.question_text !== 'string' || !q.question_text.trim()) return false;
+    if (typeof q.explanation !== 'string' || !q.explanation.trim()) return false;
+
+    if (!Array.isArray(q.options) || q.options.length < 2) return false;
+
+    const optionIds = q.options.map((opt: any) => opt?.id);
+    for (const opt of q.options) {
+      if (!opt || typeof opt !== 'object') return false;
+      if (typeof opt.id !== 'string' || !opt.id.trim()) return false;
+      if (typeof opt.text !== 'string' || !opt.text.trim()) return false;
     }
-  ]
+
+    if (!q.correct_answer || typeof q.correct_answer !== 'object') return false;
+    const correctOptId = q.correct_answer.option_id;
+    if (!correctOptId || !optionIds.includes(correctOptId)) return false;
+  }
+
+  return true;
 }
-`;
+
+const SYSTEM_CURRICULUM_ARCHITECT_INSTRUCTION = `You are CYRA AI, an elite curriculum architect and master educator.
+Your sole mission is to synthesize deeply tailored, highly personalized, and structurally distinct learning paths.`;
 
 const SYSTEM_STUDY_NOTES_INSTRUCTION = `You are CYRA AI, a master educator and academic study notes synthesizer.
-Your mission is to generate a comprehensive, highly structured, beginner-friendly study guide for a specific lesson topic.
-
-CRITICAL MANDATE:
-You MUST respond strictly with a valid raw JSON object matching this exact schema (NO markdown codeblock wrappers like \`\`\`json):
-
-{
-  "overview": "Clear 2-3 sentence introduction explaining what this topic is and why it matters.",
-  "explanation": "Detailed, comprehensive, beginner-friendly explanation covering core principles, architecture, and step-by-step logic. Use clear paragraphs and thorough educational explanations.",
-  "key_concepts": [
-    "3 to 7 key conceptual terms or definitions"
-  ],
-  "examples": [
-    "2 to 5 clear practical examples, code snippets, or real-world scenarios demonstrating the topic"
-  ],
-  "important_points": [
-    "3 to 7 high-value exam, interview, or technical revision points"
-  ],
-  "quick_revision": "A compact 2-4 sentence summary for rapid pre-exam review."
-}
-`;
+Your mission is to generate a comprehensive, highly structured, beginner-friendly study guide for a specific lesson topic.`;
 
 const SYSTEM_RESOURCE_PLANNER_INSTRUCTION = `You are CYRA AI, an expert educational resource curator.
-Your mission is to generate a high-quality, balanced Resource Discovery Plan for a specific lesson topic.
+Your mission is to generate a high-quality, balanced Resource Discovery Plan for a specific lesson topic.`;
+
+const SYSTEM_QUIZ_ARCHITECT_INSTRUCTION = `You are CYRA AI, an expert academic assessment designer.
+Your mission is to synthesize a high-quality, 5-to-8 question quiz strictly based on the lesson's core concepts, content, and learning goals.
 
 CRITICAL MANDATE:
-Do NOT invent fake web URLs. Generate metadata, highly specific search queries, and source recommendations.
+Mix question types across 'multiple_choice' (4 options with IDs "A", "B", "C", "D") and 'true_false' (2 options with IDs "true", "false").
+Questions must cover definitions, core concepts, applications, misconceptions, and simple reasoning.
+Never repeat the same concept across multiple questions.
 
 You MUST respond strictly with a valid raw JSON object matching this exact schema (NO markdown codeblock wrappers like \`\`\`json):
 
 {
-  "resources": [
+  "quiz": {
+    "title": "Compelling, clear title for this lesson quiz",
+    "description": "2-3 sentence overview explaining what skills/concepts this quiz assesses",
+    "difficulty": "beginner" | "intermediate" | "advanced",
+    "estimated_minutes": 5,
+    "passing_score": 70
+  },
+  "questions": [
     {
-      "title": "Clear, informative title for the resource",
-      "resource_type": "article" | "documentation" | "textbook" | "video" | "practice" | "reference",
-      "source": "Platform or Author (e.g. GeeksforGeeks, MDN Web Docs, MIT OpenCourseWare, YouTube Channel)",
-      "description": "2-3 sentence overview of what this resource covers and why it is beneficial",
-      "duration": "e.g. '15 mins read', '12 mins video', '30 mins practice'",
-      "difficulty": "beginner" | "intermediate" | "advanced",
-      "is_recommended": true or false,
-      "search_query": "Precise, optimized search query to find this exact resource online"
+      "question_order": 1,
+      "question_type": "multiple_choice",
+      "question_text": "Clear, precise question statement",
+      "options": [
+        { "id": "A", "text": "First choice" },
+        { "id": "B", "text": "Second choice" },
+        { "id": "C", "text": "Third choice" },
+        { "id": "D", "text": "Fourth choice" }
+      ],
+      "correct_answer": {
+        "option_id": "B"
+      },
+      "explanation": "Thorough, educational explanation of why option B is correct and others are incorrect",
+      "concept": "specific micro-concept tested e.g. array indexing",
+      "difficulty": "beginner",
+      "points": 1
     }
   ]
 }
-
-Generate approximately 5-7 high-value items with a balanced mix across reading (articles, docs), videos, and practice exercises.
 `;
 
 export class GroqProvider implements AIProvider {
@@ -200,16 +208,6 @@ export class GroqProvider implements AIProvider {
           model: GROQ_MODEL,
           error: 'Groq API rate limit exceeded.',
           code: 'RATE_LIMIT_EXCEEDED',
-        };
-      }
-
-      if (status === 401) {
-        return {
-          success: false,
-          provider: 'groq',
-          model: GROQ_MODEL,
-          error: 'Invalid Groq API Key.',
-          code: 'INVALID_API_KEY',
         };
       }
 
@@ -543,6 +541,115 @@ Generate a balanced list of 5 to 7 resources strictly matching the JSON schema.`
         provider: 'groq',
         model: GROQ_MODEL,
         error: error?.message || 'Failed to generate resource discovery plan.',
+        code: 'PROVIDER_ERROR',
+      };
+    }
+  }
+
+  async generateQuiz(
+    options: GenerateQuizOptions
+  ): Promise<AIQuizResponse> {
+    const apiKey = process.env.GROQ_API_KEY;
+
+    if (!apiKey) {
+      return {
+        success: false,
+        provider: 'groq',
+        model: GROQ_MODEL,
+        error: 'GROQ_API_KEY is not configured in environment variables.',
+        code: 'MISSING_API_KEY',
+      };
+    }
+
+    try {
+      const groq = new Groq({ apiKey });
+
+      const userPrompt = `Synthesize a 5 to 8 question quiz for:
+Course Title: "${options.courseTitle || 'General Course'}" (Level: ${options.experienceLevel || 'beginner'})
+Module Title: "${options.moduleTitle || 'General Module'}"
+Lesson Title: "${options.lessonTitle}"
+Lesson Description / Scope: "${options.lessonDescription || options.lessonContent || 'Core fundamentals'}"
+${options.keyConcepts ? `Key Concepts: ${options.keyConcepts.join(', ')}` : ''}
+
+Generate a complete, structured Quiz JSON strictly adhering to the system schema.`;
+
+      const completion = await groq.chat.completions.create({
+        messages: [
+          { role: 'system', content: SYSTEM_QUIZ_ARCHITECT_INSTRUCTION },
+          { role: 'user', content: userPrompt },
+        ],
+        model: GROQ_MODEL,
+        temperature: 0.6,
+        max_tokens: 3500,
+        response_format: { type: 'json_object' },
+      });
+
+      const rawContent = completion.choices[0]?.message?.content?.trim();
+
+      if (!rawContent) {
+        return {
+          success: false,
+          provider: 'groq',
+          model: GROQ_MODEL,
+          error: 'Empty response returned from Groq AI API.',
+          code: 'EMPTY_RESPONSE',
+        };
+      }
+
+      const cleanJson = rawContent
+        .replace(/^```json\s*/, '')
+        .replace(/^```\s*/, '')
+        .replace(/\s*```$/, '')
+        .trim();
+
+      let parsedJson: any;
+      try {
+        parsedJson = JSON.parse(cleanJson);
+      } catch (parseErr) {
+        console.error('Failed to parse Quiz JSON:', rawContent);
+        return {
+          success: false,
+          provider: 'groq',
+          model: GROQ_MODEL,
+          error: 'AI returned malformed non-JSON output.',
+          code: 'INVALID_JSON',
+        };
+      }
+
+      if (!validateQuizData(parsedJson)) {
+        console.error('[GROQ QUIZ] Validation failed for payload:', parsedJson);
+        return {
+          success: false,
+          provider: 'groq',
+          model: GROQ_MODEL,
+          error: 'AI response failed quiz schema validation.',
+          code: 'VALIDATION_ERROR',
+        };
+      }
+
+      return {
+        success: true,
+        data: parsedJson,
+        provider: 'groq',
+        model: GROQ_MODEL,
+      };
+    } catch (error: any) {
+      const status = error?.status || error?.statusCode;
+      if (status === 429) {
+        return {
+          success: false,
+          provider: 'groq',
+          model: GROQ_MODEL,
+          error: 'AI provider rate limit reached.',
+          code: 'RATE_LIMIT_EXCEEDED',
+        };
+      }
+
+      return {
+        success: false,
+        provider: 'groq',
+        model: GROQ_MODEL,
+        error: error?.message || 'Failed to generate quiz.',
         code: 'PROVIDER_ERROR',
       };
     }

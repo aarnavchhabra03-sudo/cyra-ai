@@ -8,10 +8,12 @@ import {
   GenerateStudyNotesOptions,
   AIStudyNotesResponse,
   GenerateResourcePlanOptions,
-  AIResourcePlanResponse
+  AIResourcePlanResponse,
+  GenerateQuizOptions,
+  AIQuizResponse
 } from './types';
 import { validateLearningPath, LearningPathGeneration } from '@/types/ai';
-import { validateStudyNotes, validateResourcePlan } from './groq';
+import { validateStudyNotes, validateResourcePlan, validateQuizData } from './groq';
 
 export const GEMINI_MODEL = 'gemini-2.0-flash-lite';
 
@@ -254,6 +256,68 @@ export class GeminiProvider implements AIProvider {
         provider: 'gemini',
         model: GEMINI_MODEL,
         error: error?.message || 'Gemini resource plan generation failed.',
+        code: 'PROVIDER_ERROR',
+      };
+    }
+  }
+
+  async generateQuiz(
+    options: GenerateQuizOptions
+  ): Promise<AIQuizResponse> {
+    const apiKey = process.env.GEMINI_API_KEY;
+
+    if (!apiKey) {
+      return {
+        success: false,
+        provider: 'gemini',
+        model: GEMINI_MODEL,
+        error: 'GEMINI_API_KEY is not configured in environment variables.',
+        code: 'MISSING_API_KEY',
+      };
+    }
+
+    try {
+      const ai = new GoogleGenAI({ apiKey });
+
+      const response = await ai.models.generateContent({
+        model: GEMINI_MODEL,
+        contents: `Generate a 5-question quiz JSON for lesson "${options.lessonTitle}" in course "${options.courseTitle || ''}". Include JSON with "quiz" (title, description, difficulty, estimated_minutes, passing_score) and "questions" (array of 5 objects with question_order, question_type, question_text, options [{id, text}], correct_answer {option_id}, explanation, concept, difficulty, points).`,
+      });
+
+      const rawText = response.text?.trim();
+      if (!rawText) {
+        return {
+          success: false,
+          provider: 'gemini',
+          model: GEMINI_MODEL,
+          error: 'Empty response from Gemini.',
+          code: 'EMPTY_RESPONSE',
+        };
+      }
+
+      const parsed = JSON.parse(rawText.replace(/```json|```/g, '').trim());
+      if (!validateQuizData(parsed)) {
+        return {
+          success: false,
+          provider: 'gemini',
+          model: GEMINI_MODEL,
+          error: 'AI response failed quiz validation.',
+          code: 'VALIDATION_ERROR',
+        };
+      }
+
+      return {
+        success: true,
+        data: parsed,
+        provider: 'gemini',
+        model: GEMINI_MODEL,
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        provider: 'gemini',
+        model: GEMINI_MODEL,
+        error: error?.message || 'Gemini quiz generation failed.',
         code: 'PROVIDER_ERROR',
       };
     }

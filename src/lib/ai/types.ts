@@ -60,6 +60,39 @@ export interface ResourcePlanData {
   resources: ResourcePlanItem[];
 }
 
+export interface GenerateQuizOptions {
+  courseTitle?: string;
+  moduleTitle?: string;
+  lessonTitle: string;
+  lessonDescription?: string;
+  lessonContent?: string;
+  keyConcepts?: string[];
+  experienceLevel?: string;
+}
+
+export interface GeneratedQuizQuestionItem {
+  question_order: number;
+  question_type: 'multiple_choice' | 'true_false';
+  question_text: string;
+  options: Array<{ id: string; text: string }>;
+  correct_answer: { option_id: string };
+  explanation: string;
+  concept?: string;
+  difficulty?: string;
+  points?: number;
+}
+
+export interface GeneratedQuizData {
+  quiz: {
+    title: string;
+    description: string;
+    difficulty: 'beginner' | 'intermediate' | 'advanced';
+    estimated_minutes: number;
+    passing_score: number;
+  };
+  questions: GeneratedQuizQuestionItem[];
+}
+
 export interface AIResponse {
   success: boolean;
   message?: string;
@@ -96,10 +129,20 @@ export interface AIResourcePlanResponse {
   code?: string;
 }
 
+export interface AIQuizResponse {
+  success: boolean;
+  data?: GeneratedQuizData;
+  provider: AIProviderName;
+  model: string;
+  error?: string;
+  code?: string;
+}
+
 export interface AIProvider {
   name: AIProviderName;
   generateContent(options: AIGenerateOptions): Promise<AIResponse>;
   generateLearningPath(options: GenerateLearningPathOptions): Promise<AILearningPathResponse>;
   generateStudyNotes(options: GenerateStudyNotesOptions): Promise<AIStudyNotesResponse>;
   generateResourcePlan(options: GenerateResourcePlanOptions): Promise<AIResourcePlanResponse>;
+  generateQuiz(options: GenerateQuizOptions): Promise<AIQuizResponse>;
 }
