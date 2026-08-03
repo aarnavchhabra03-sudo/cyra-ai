@@ -62,7 +62,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    // 3. DB CACHE CHECK: If a quiz already exists for this lesson, return it
+    // 3. DB CACHE CHECK: Valid ONLY if quiz status is 'ready' AND questions.length > 0
     const { data: existingQuiz, error: fetchErr } = await supabase
       .from('quizzes')
       .select('*')
@@ -71,17 +71,23 @@ export async function POST(request: Request) {
       .maybeSingle();
 
     if (!fetchErr && existingQuiz && existingQuiz.generation_status === 'ready') {
-      console.log('[GENERATE QUIZ] DB CACHE HIT: Reusing existing quiz for lesson:', lessonId);
       const safeQuestions = await getSafeQuizQuestions(existingQuiz.id);
 
-      return NextResponse.json({
-        success: true,
-        cached: true,
-        data: {
-          quiz: existingQuiz,
-          questions: safeQuestions,
-        },
-      });
+      if (safeQuestions && safeQuestions.length > 0) {
+        console.log(`[GENERATE QUIZ] DB CACHE HIT: Reusing existing quiz (${existingQuiz.id}) with ${safeQuestions.length} questions for lesson:`, lessonId);
+        return NextResponse.json({
+          success: true,
+          cached: true,
+          data: {
+            quiz: existingQuiz,
+            questions: safeQuestions,
+          },
+        });
+      } else {
+        console.warn(`[GENERATE QUIZ] Invalid cached quiz detected (${existingQuiz.id}) - 0 valid questions found. Cleaning up orphaned record...`);
+        // Privileged cleanup of orphaned 0-question quiz record
+        await adminClient.from('quizzes').delete().eq('id', existingQuiz.id);
+      }
     }
 
     // 4. VERIFY AUTHORIZATION & FETCH LESSON CONTEXT
@@ -197,14 +203,19 @@ export async function POST(request: Request) {
 
     if (recheckQuiz && recheckQuiz.generation_status === 'ready') {
       const recheckSafeQuestions = await getSafeQuizQuestions(recheckQuiz.id);
-      return NextResponse.json({
-        success: true,
-        cached: true,
-        data: {
-          quiz: recheckQuiz,
-          questions: recheckSafeQuestions,
-        },
-      });
+      if (recheckSafeQuestions && recheckSafeQuestions.length > 0) {
+        return NextResponse.json({
+          success: true,
+          cached: true,
+          data: {
+            quiz: recheckQuiz,
+            questions: recheckSafeQuestions,
+          },
+        });
+      } else {
+        console.warn(`[GENERATE QUIZ] Invalid concurrent cached quiz detected (${recheckQuiz.id}) - 0 valid questions found. Cleaning up...`);
+        await adminClient.from('quizzes').delete().eq('id', recheckQuiz.id);
+      }
     }
 
     // 7. INSERT QUIZZES ROW VIA ADMIN CLIENT (PRIVILEGED SERVER WRITE)
