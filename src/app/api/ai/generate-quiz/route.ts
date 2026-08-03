@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
+import { adminClient } from '@/lib/supabase/admin';
 import { getAIProvider } from '@/lib/ai/provider';
 import { getSafeQuizQuestions } from '@/lib/quiz/server';
 
@@ -206,8 +207,8 @@ export async function POST(request: Request) {
       });
     }
 
-    // 7. INSERT QUIZZES ROW
-    const { data: insertedQuiz, error: quizInsertErr } = await supabase
+    // 7. INSERT QUIZZES ROW VIA ADMIN CLIENT (PRIVILEGED SERVER WRITE)
+    const { data: insertedQuiz, error: quizInsertErr } = await adminClient
       .from('quizzes')
       .insert({
         lesson_id: lessonId,
@@ -235,7 +236,7 @@ export async function POST(request: Request) {
       );
     }
 
-    // 8. INSERT QUIZ_QUESTIONS ROWS (WITH PRIVILEGED correct_answer)
+    // 8. INSERT QUIZ_QUESTIONS ROWS VIA ADMIN CLIENT (PRIVILEGED SERVER WRITE)
     const questionRows = generatedData.questions.map(q => ({
       quiz_id: insertedQuiz.id,
       question_order: q.question_order,
@@ -249,14 +250,19 @@ export async function POST(request: Request) {
       points: q.points || 1,
     }));
 
-    const { error: questionsInsertErr } = await supabase
+    console.log(
+      "[QUESTION ROWS]",
+      JSON.stringify(questionRows, null, 2)
+    );
+
+    const { error: questionsInsertErr } = await adminClient
       .from('quiz_questions')
       .insert(questionRows);
 
     if (questionsInsertErr) {
       console.error('[GENERATE QUIZ] Error inserting quiz questions:', questionsInsertErr);
-      // Clean up orphaned quiz row if questions failed to insert
-      await supabase.from('quizzes').delete().eq('id', insertedQuiz.id);
+      // Clean up orphaned quiz row if questions failed to insert via adminClient
+      await adminClient.from('quizzes').delete().eq('id', insertedQuiz.id);
 
       return NextResponse.json(
         {
