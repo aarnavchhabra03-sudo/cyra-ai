@@ -289,6 +289,7 @@ CREATE TABLE IF NOT EXISTS public.quizzes (
 );
 
 CREATE INDEX IF NOT EXISTS idx_quizzes_lesson_id ON public.quizzes(lesson_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_quizzes_lesson_version ON public.quizzes(lesson_id, version);
 
 ALTER TABLE public.quizzes ENABLE ROW LEVEL SECURITY;
 
@@ -318,7 +319,7 @@ CREATE POLICY "Users can insert quizzes for their learning paths"
     )
   );
 
--- B. QUIZ QUESTIONS TABLE
+-- B. QUIZ QUESTIONS TABLE (NO DIRECT CLIENT SELECT POLICY TO PROTECT correct_answer)
 CREATE TABLE IF NOT EXISTS public.quiz_questions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   quiz_id UUID NOT NULL REFERENCES public.quizzes(id) ON DELETE CASCADE,
@@ -331,28 +332,17 @@ CREATE TABLE IF NOT EXISTS public.quiz_questions (
   concept TEXT,
   difficulty TEXT,
   points INTEGER DEFAULT 1,
-  created_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  CONSTRAINT unique_quiz_question_order UNIQUE (quiz_id, question_order)
 );
 
 CREATE INDEX IF NOT EXISTS idx_quiz_questions_quiz_id ON public.quiz_questions(quiz_id);
 
+-- Enable RLS without creating a SELECT policy.
+-- This ensures standard browser client queries (e.g., supabase.from('quiz_questions')) cannot leak correct_answer.
 ALTER TABLE public.quiz_questions ENABLE ROW LEVEL SECURITY;
 
-DROP POLICY IF EXISTS "Users can view questions for their quizzes" ON public.quiz_questions;
-CREATE POLICY "Users can view questions for their quizzes"
-  ON public.quiz_questions FOR SELECT
-  USING (
-    EXISTS (
-      SELECT 1 FROM public.quizzes
-      JOIN public.lessons ON quizzes.lesson_id = lessons.id
-      JOIN public.modules ON lessons.module_id = modules.id
-      JOIN public.learning_paths ON modules.learning_path_id = learning_paths.id
-      WHERE quizzes.id = quiz_questions.quiz_id
-      AND learning_paths.user_id = auth.uid()
-    )
-  );
-
--- C. BROWSER-SAFE FUNCTION FOR FETCHING QUESTIONS WITHOUT CORRECT_ANSWER
+-- C. BROWSER-SAFE RPC FUNCTION FOR FETCHING QUESTIONS (SECURE & OWNERSHIP VERIFIED)
 CREATE OR REPLACE FUNCTION public.get_safe_quiz_questions(p_quiz_id UUID)
 RETURNS TABLE (
   id UUID,
@@ -366,6 +356,18 @@ RETURNS TABLE (
   points INT
 ) SECURITY DEFINER LANGUAGE plpgsql AS $$
 BEGIN
+  -- Verify ownership: requesting user must own the learning_path containing this quiz
+  IF NOT EXISTS (
+    SELECT 1 FROM public.quizzes q
+    JOIN public.lessons l ON q.lesson_id = l.id
+    JOIN public.modules m ON l.module_id = m.id
+    JOIN public.learning_paths lp ON m.learning_path_id = lp.id
+    WHERE q.id = p_quiz_id
+    AND lp.user_id = auth.uid()
+  ) THEN
+    RAISE EXCEPTION 'Access denied: You do not own the learning path for this quiz.';
+  END IF;
+
   RETURN QUERY
   SELECT
     qq.id,
@@ -383,16 +385,7 @@ BEGIN
 END;
 $$;
 
--- D. EXTEND QUIZ ATTEMPTS TABLE (SAFELY ADD MISSING COLUMNS IF NOT EXISTS)
-CREATE TABLE IF NOT EXISTS public.quiz_attempts (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
-  lesson_id UUID REFERENCES public.lessons(id) ON DELETE CASCADE,
-  score INTEGER NOT NULL DEFAULT 0,
-  total_questions INTEGER NOT NULL DEFAULT 0,
-  created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
+-- D. EXTEND QUIZ ATTEMPTS TABLE (SAFELY ALTER EXISTING TABLE ONLY)
 ALTER TABLE public.quiz_attempts ADD COLUMN IF NOT EXISTS quiz_id UUID REFERENCES public.quizzes(id) ON DELETE CASCADE;
 ALTER TABLE public.quiz_attempts ADD COLUMN IF NOT EXISTS percentage INTEGER DEFAULT 0;
 ALTER TABLE public.quiz_attempts ADD COLUMN IF NOT EXISTS correct_answers INTEGER DEFAULT 0;
