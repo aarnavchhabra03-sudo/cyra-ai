@@ -1,7 +1,15 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { getAIProvider } from '@/lib/ai/provider';
-import { searchTavily, sanitizeUrl, extractDomain } from '@/lib/search/tavily';
+import { searchTavily } from '@/lib/search/tavily';
+import { 
+  LessonContext, 
+  EvaluatedCandidate, 
+  evaluateCandidate, 
+  calculateTitleSimilarity, 
+  extractDomain, 
+  MIN_RESOURCE_RELEVANCE_SCORE 
+} from '@/lib/search/quality-engine';
 
 export async function POST(request: Request) {
   // 1. Authenticate user via Supabase SSR
@@ -70,7 +78,7 @@ export async function POST(request: Request) {
       .order('created_at', { ascending: true });
 
     if (!fetchErr && existingResources && existingResources.length > 0) {
-      console.log('[GENERATE RESOURCES] DB CACHE HIT: Returning saved resources for lesson:', lessonId);
+      console.log('[CYRA RESOURCE ENGINE] DB CACHE HIT: Returning saved resources for lesson:', lessonId);
       return NextResponse.json({
         success: true,
         data: existingResources,
@@ -103,7 +111,7 @@ export async function POST(request: Request) {
       .single();
 
     if (lessonErr || !lessonRecord) {
-      console.error('[GENERATE RESOURCES] LESSON NOT FOUND:', lessonErr);
+      console.error('[CYRA RESOURCE ENGINE] LESSON NOT FOUND:', lessonErr);
       return NextResponse.json(
         {
           success: false,
@@ -128,20 +136,33 @@ export async function POST(request: Request) {
       );
     }
 
-    // 5. STEP A — CALL AI PROVIDER TO SYNTHESIZE RESOURCE DISCOVERY PLAN
-    console.log('[GENERATE RESOURCES] Lesson:', lessonRecord.title);
-
-    const provider = getAIProvider();
-
+    // CONSTRUCT RICH LESSON CONTEXT OBJECT
     const derivedDesc = (lessonRecord as any).description || (lessonRecord.content ? lessonRecord.content.split('\n')[0].replace(/^#+\s*/, '') : '');
 
-    const aiResponse = await provider.generateResourcePlan({
+    const lessonContext: LessonContext = {
       courseTitle: parentPath.title,
       moduleTitle: parentModule.title,
       lessonTitle: lessonRecord.title,
       lessonDescription: derivedDesc,
-      lessonContent: lessonRecord.content || '',
       experienceLevel: parentPath.experience_level || 'beginner',
+    };
+
+    console.log(`[CYRA RESOURCE ENGINE] STAGE 11.6 LESSON CONTEXT:
+    Course: "${lessonContext.courseTitle}"
+    Module: "${lessonContext.moduleTitle}"
+    Lesson: "${lessonContext.lessonTitle}"
+    Level:  "${lessonContext.experienceLevel}"`);
+
+    // 5. STEP A — CALL AI PROVIDER FOR TAILORED RESOURCE PLAN REQUIREMENTS
+    const provider = getAIProvider();
+
+    const aiResponse = await provider.generateResourcePlan({
+      courseTitle: lessonContext.courseTitle,
+      moduleTitle: lessonContext.moduleTitle,
+      lessonTitle: lessonContext.lessonTitle,
+      lessonDescription: lessonContext.lessonDescription,
+      lessonContent: lessonRecord.content || '',
+      experienceLevel: lessonContext.experienceLevel,
     });
 
     if (!aiResponse.success || !aiResponse.data) {
@@ -159,7 +180,7 @@ export async function POST(request: Request) {
       return NextResponse.json(
         {
           success: false,
-          error: aiResponse.error || 'Failed to generate resource discovery plan from AI provider.',
+          error: aiResponse.error || 'Failed to generate resource plan requirements from AI provider.',
           code: 'AI_GENERATION_FAILED',
         },
         { status: 500 }
@@ -167,96 +188,132 @@ export async function POST(request: Request) {
     }
 
     const aiPlanItems = aiResponse.data.resources;
-    console.log(`[GENERATE RESOURCES] AI generated ${aiPlanItems.length} resource recommendations.`);
+    console.log(`[CYRA RESOURCE ENGINE] AI generated ${aiPlanItems.length} resource requirements.`);
 
-    // 6. STEP B — DISCOVER VERIFIED LIVE URLS VIA TAVILY SEARCH
-    const verifiedResourcesToInsert: any[] = [];
-    const usedUrls = new Set<string>();
-
+    // 6. STEP B — COLLECT CANDIDATES & RUN HARD FILTERING + RELEVANCE SCORING
+    const candidatePool: EvaluatedCandidate[] = [];
     let totalSearches = 0;
-    let candidateCount = 0;
-    let rejectedCount = 0;
+    let rawCandidateCount = 0;
 
     for (const item of aiPlanItems) {
-      const query = item.search_query || `${lessonRecord.title} ${item.title}`;
+      // Enrich search query with subject context
+      const targetedQuery = `${lessonContext.courseTitle} ${lessonContext.lessonTitle} ${item.title} ${item.resource_type}`.trim();
       totalSearches++;
 
-      const tavilyResults = await searchTavily(query, 5);
-      candidateCount += tavilyResults.length;
+      const tavilyResults = await searchTavily(targetedQuery, 5);
+      rawCandidateCount += tavilyResults.length;
 
-      let matchedResult = null;
-      let validUrl = null;
+      for (const candidate of tavilyResults) {
+        const evaluation = evaluateCandidate(candidate, lessonContext, item);
 
-      for (const res of tavilyResults) {
-        const sanitized = sanitizeUrl(res.url);
-        if (!sanitized) {
-          rejectedCount++;
-          continue;
+        console.log(`[CYRA RESOURCE ENGINE CANDIDATE EVALUATION]:
+        - Query:      "${targetedQuery}"
+        - Candidate:  "${candidate.title}" (${candidate.url})
+        - Score:      ${evaluation.score}/100 (Threshold: ${MIN_RESOURCE_RELEVANCE_SCORE})
+        - Passed:     ${evaluation.passed ? 'YES ✅' : 'NO ❌'}
+        - Reasons:    ${evaluation.reasons.join(' | ')}`);
+
+        if (evaluation.passed) {
+          candidatePool.push(evaluation);
         }
-
-        if (usedUrls.has(sanitized)) {
-          rejectedCount++;
-          continue;
-        }
-
-        // Found a valid, non-duplicate http/https URL
-        validUrl = sanitized;
-        matchedResult = res;
-        break;
-      }
-
-      if (validUrl && matchedResult) {
-        usedUrls.add(validUrl);
-
-        const sourceDomain = item.source || extractDomain(validUrl);
-
-        verifiedResourcesToInsert.push({
-          lesson_id: lessonId,
-          title: item.title || matchedResult.title,
-          resource_type: (item.resource_type || 'article').toLowerCase(),
-          url: validUrl,
-          source: sourceDomain,
-          description: item.description || matchedResult.content?.slice(0, 200) || '',
-          duration: item.duration || null,
-          difficulty: (item.difficulty || 'beginner').toLowerCase(),
-          is_recommended: !!item.is_recommended,
-        });
-      } else {
-        console.warn(`[GENERATE RESOURCES] No valid search result found for query: "${query}"`);
       }
     }
 
-    console.log(`[GENERATE RESOURCES] LOGS:
-    - Lesson: "${lessonRecord.title}"
-    - AI Recommendations: ${aiPlanItems.length}
-    - Tavily Searches: ${totalSearches}
-    - Candidates Found: ${candidateCount}
-    - Candidates Rejected: ${rejectedCount}
-    - Verified & Ready to Persist: ${verifiedResourcesToInsert.length}`);
+    // 7. STEP C — DEDUPLICATION, RELEVANCE SORTING, AND CATEGORY BALANCING
+    // Sort passed candidates by relevance score descending
+    candidatePool.sort((a, b) => b.score - a.score);
 
-    if (verifiedResourcesToInsert.length === 0) {
+    const finalSelected: EvaluatedCandidate[] = [];
+    const usedUrls = new Set<string>();
+    const acceptedTitles: string[] = [];
+
+    const categoryCounts = {
+      reading: 0,
+      video: 0,
+      practice: 0,
+    };
+
+    for (const evalItem of candidatePool) {
+      const url = evalItem.cleanUrl;
+      const title = evalItem.candidate.title || evalItem.item.title;
+      const type = (evalItem.item.resource_type || 'article').toLowerCase();
+
+      // Check URL duplicate
+      if (usedUrls.has(url)) {
+        console.log(`[CYRA RESOURCE ENGINE] Rejecting duplicate URL: ${url}`);
+        continue;
+      }
+
+      // Check title similarity with already accepted titles (> 0.75 similarity threshold)
+      const isTitleDuplicate = acceptedTitles.some(accTitle => calculateTitleSimilarity(title, accTitle) > 0.75);
+      if (isTitleDuplicate) {
+        console.log(`[CYRA RESOURCE ENGINE] Rejecting near-duplicate title: "${title}"`);
+        continue;
+      }
+
+      // Check category balance preference (quota soft limits: max 3 reading, max 2 video, max 2 practice)
+      const catKey = ['article', 'documentation', 'textbook', 'reference'].includes(type) ? 'reading' : type === 'video' ? 'video' : 'practice';
+      const maxLimit = catKey === 'reading' ? 3 : 2;
+
+      if (categoryCounts[catKey] >= maxLimit) {
+        console.log(`[CYRA RESOURCE ENGINE] Category "${catKey}" reached max soft limit (${maxLimit}). Skipping candidate.`);
+        continue;
+      }
+
+      // Accept candidate into final learning pack
+      usedUrls.add(url);
+      acceptedTitles.push(title);
+      categoryCounts[catKey]++;
+      finalSelected.push(evalItem);
+    }
+
+    console.log(`[CYRA RESOURCE ENGINE] SELECTION STATS:
+    - Raw Tavily Candidates Collected: ${rawCandidateCount}
+    - Candidates Passing Threshold (>=${MIN_RESOURCE_RELEVANCE_SCORE}): ${candidatePool.length}
+    - Final Unique & Balanced Candidates Selected: ${finalSelected.length}`);
+
+    if (finalSelected.length === 0) {
       return NextResponse.json(
         {
           success: false,
-          error: 'Could not find verified live web resources for this lesson. Please try again.',
-          code: 'NO_VALID_RESOURCES',
+          error: 'No highly relevant, verified resources met CYRA quality standards for this lesson. Please try again.',
+          code: 'NO_RELEVANT_RESOURCES',
         },
         { status: 500 }
       );
     }
 
-    // 7. STEP C — PERSIST VERIFIED RESOURCES INTO PUBLIC.LEARNING_RESOURCES
+    // 8. STEP D — MAP TO SUPABASE LEARNING_RESOURCES SCHEMA & ASSIGN RECOMMENDED STATUS
+    // Top 1-2 candidates get is_recommended = true
+    const resourcesToInsert = finalSelected.map((evalItem, index) => {
+      const { candidate, item, cleanUrl, score } = evalItem;
+      const domain = item.source || extractDomain(cleanUrl);
+
+      return {
+        lesson_id: lessonId,
+        title: candidate.title || item.title,
+        resource_type: (item.resource_type || 'article').toLowerCase(),
+        url: cleanUrl,
+        source: domain,
+        description: item.description || candidate.content?.slice(0, 250) || '',
+        duration: item.duration || null,
+        difficulty: (item.difficulty || lessonContext.experienceLevel || 'beginner').toLowerCase(),
+        is_recommended: index < 2, // Top 2 highest scoring items marked as recommended
+      };
+    });
+
+    // 9. PERSIST VERIFIED & SCORED RESOURCES INTO PUBLIC.LEARNING_RESOURCES
     const { data: insertedRows, error: insertErr } = await supabase
       .from('learning_resources')
-      .insert(verifiedResourcesToInsert)
+      .insert(resourcesToInsert)
       .select('*');
 
     if (insertErr) {
-      console.error('[GENERATE RESOURCES] DB INSERT ERROR:', insertErr);
+      console.error('[CYRA RESOURCE ENGINE] DB INSERT ERROR:', insertErr);
       return NextResponse.json(
         {
           success: false,
-          error: 'Failed to save verified learning resources to database.',
+          error: 'Failed to persist verified resources to database.',
           code: 'DB_SAVE_FAILED',
         },
         { status: 500 }
@@ -269,7 +326,7 @@ export async function POST(request: Request) {
       cached: false,
     });
   } catch (error: any) {
-    console.error('Unhandled resource plan generation error:', error);
+    console.error('[CYRA RESOURCE ENGINE] Unhandled server error:', error);
     return NextResponse.json(
       {
         success: false,
