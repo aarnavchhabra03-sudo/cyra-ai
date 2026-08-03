@@ -2,7 +2,6 @@
 
 import React, { useEffect, useState, use } from 'react';
 import { useRouter } from 'next/navigation';
-import { createClient } from '@/lib/supabase/client';
 import PracticePlayer, { PracticeQuestionItem } from '@/components/practice-player';
 import { Loader2, AlertCircle, ArrowLeft } from 'lucide-react';
 
@@ -20,38 +19,19 @@ export default function PracticeSessionPage({ params }: { params: Promise<{ sess
   useEffect(() => {
     async function loadPracticeSession() {
       try {
-        const supabase = createClient();
-        
-        // 1. Fetch practice session info
-        const { data: sessionData, error: sessionErr } = await supabase
-          .from('adaptive_practice_sessions')
-          .select('id, concept, mastery_before, status')
-          .eq('id', sessionId)
-          .single();
+        // Fetch safe practice session & questions from authenticated server API endpoint
+        const res = await fetch(`/api/adaptive/practice/session?sessionId=${encodeURIComponent(sessionId)}`);
+        const result = await res.json();
 
-        if (sessionErr || !sessionData) {
-          setError('Practice session not found or access denied.');
+        if (!res.ok || !result.success || !result.data) {
+          setError(result.error || 'Failed to load practice session.');
           setLoading(false);
           return;
         }
 
-        setConcept(sessionData.concept);
-        setMasteryBefore(sessionData.mastery_before);
-
-        // 2. Fetch practice questions (safe columns without correct_answer)
-        const { data: questionData, error: qErr } = await supabase
-          .from('adaptive_practice_questions')
-          .select('id, question_order, question_type, question_text, options, concept, difficulty, points')
-          .eq('session_id', sessionId)
-          .order('question_order', { ascending: true });
-
-        if (qErr || !questionData || questionData.length === 0) {
-          setError('Failed to load questions for this practice session.');
-          setLoading(false);
-          return;
-        }
-
-        setQuestions(questionData as PracticeQuestionItem[]);
+        setConcept(result.data.concept);
+        setMasteryBefore(result.data.masteryBefore);
+        setQuestions(result.data.questions || []);
       } catch (err: any) {
         console.error('[PRACTICE PAGE] Error loading session:', err);
         setError('An unexpected error occurred while loading the practice session.');

@@ -30,10 +30,10 @@ CREATE TABLE IF NOT EXISTS public.adaptive_practice_questions (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 3. ADAPTIVE PRACTICE ATTEMPTS TABLE
+-- 3. ADAPTIVE PRACTICE ATTEMPTS TABLE (WITH UNIQUE session_id CONSTRAINT FOR IDEMPOTENCY)
 CREATE TABLE IF NOT EXISTS public.adaptive_practice_attempts (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  session_id UUID NOT NULL REFERENCES public.adaptive_practice_sessions(id) ON DELETE CASCADE,
+  session_id UUID NOT NULL UNIQUE REFERENCES public.adaptive_practice_sessions(id) ON DELETE CASCADE,
   user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
   score INTEGER NOT NULL DEFAULT 0,
   percentage INTEGER NOT NULL DEFAULT 0,

@@ -63,8 +63,34 @@ export async function POST(request: Request) {
 
   const parsedDuration = Math.max(0, parseInt(String(durationSeconds), 10) || 0);
 
+  // Validate itemized answer structure
+  const seenQuestionIds = new Set<string>();
+  for (const item of answers as SubmittedAnswerItem[]) {
+    if (!item || !item.questionId || typeof item.questionId !== 'string') {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'Each answer item must specify a valid string questionId.',
+          code: 'INVALID_INPUT',
+        },
+        { status: 400 }
+      );
+    }
+    if (seenQuestionIds.has(item.questionId)) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: `Duplicate questionId detected in submission: ${item.questionId}`,
+          code: 'DUPLICATE_QUESTION_ID',
+        },
+        { status: 400 }
+      );
+    }
+    seenQuestionIds.add(item.questionId);
+  }
+
   try {
-    // 3. RETRIEVE PRACTICE SESSION & VERIFY OWNERSHIP
+    // 3. RETRIEVE PRACTICE SESSION & VERIFY OWNERSHIP FIRST
     const { data: sessionRecord, error: sessionErr } = await adminClient
       .from('adaptive_practice_sessions')
       .select('*')
@@ -139,6 +165,21 @@ export async function POST(request: Request) {
         },
         { status: 500 }
       );
+    }
+
+    // AUDIT ITEM 9: VERIFY ALL SUBMITTED QUESTION IDS BELONG TO THIS SESSION
+    const validQuestionIds = new Set(dbQuestions.map(q => q.id));
+    for (const qId of seenQuestionIds) {
+      if (!validQuestionIds.has(qId)) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: `Submitted questionId ${qId} does not belong to session ${sessionId}.`,
+            code: 'INVALID_QUESTION_FOR_SESSION',
+          },
+          { status: 400 }
+        );
+      }
     }
 
     // 5. PERFORM SERVER-SIDE DETERMINISTIC GRADING
