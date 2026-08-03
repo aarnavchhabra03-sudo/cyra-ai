@@ -1,4 +1,5 @@
 import { createClient } from '@/lib/supabase/server';
+import { adminClient } from '@/lib/supabase/admin';
 import { 
   QuizRecord, 
   SafeQuizQuestion, 
@@ -57,23 +58,29 @@ export async function getSafeQuizQuestions(quizId: string): Promise<SafeQuizQues
 
   if (!user) return [];
 
-  // Try RPC first if created, or server query projecting safe fields
+  // 1. Try RPC first
   const { data: rpcData, error: rpcErr } = await supabase.rpc('get_safe_quiz_questions', {
     p_quiz_id: quizId
   });
 
-  if (!rpcErr && rpcData) {
+  if (!rpcErr && rpcData && Array.isArray(rpcData) && rpcData.length > 0) {
     return rpcData as SafeQuizQuestion[];
   }
 
-  // Fallback server projection: SELECT ONLY safe non-privileged columns
-  const { data, error } = await supabase
+  if (rpcErr) {
+    console.warn('[QUIZ SERVER] RPC get_safe_quiz_questions failed, using admin fallback:', rpcErr);
+  }
+
+  // 2. Fallback server projection via adminClient: SELECT ONLY safe non-privileged columns
+  // Strips correct_answer and explanation before returning.
+  const { data, error } = await adminClient
     .from('quiz_questions')
     .select('id, quiz_id, question_order, question_type, question_text, options, concept, difficulty, points')
     .eq('quiz_id', quizId)
     .order('question_order', { ascending: true });
 
   if (error || !data) {
+    console.error('[QUIZ SERVER] getSafeQuizQuestions admin fallback error:', error);
     return [];
   }
 

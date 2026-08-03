@@ -71,13 +71,28 @@ export default function QuizTab({
         if (existingQuiz && isSubscribed) {
           setQuiz(existingQuiz as QuizRecord);
 
-          // 2. Fetch browser-safe questions via RPC
+          // 2. Try fetching browser-safe questions via RPC
           const { data: safeQuestions, error: rpcErr } = await supabase.rpc('get_safe_quiz_questions', {
             p_quiz_id: existingQuiz.id
           });
 
-          if (!rpcErr && safeQuestions && isSubscribed) {
+          if (!rpcErr && safeQuestions && Array.isArray(safeQuestions) && safeQuestions.length > 0 && isSubscribed) {
             setQuestions(safeQuestions as SafeQuizQuestion[]);
+          } else if (isSubscribed) {
+            // RPC failed or returned empty -> Call server route to load safe questions
+            try {
+              const res = await fetch('/api/ai/generate-quiz', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ lessonId: activeNodeId }),
+              });
+              const result = await res.json();
+              if (result.success && result.data?.questions && isSubscribed) {
+                setQuestions(result.data.questions);
+              }
+            } catch (apiErr) {
+              console.error('[QUIZ TAB] API questions load error:', apiErr);
+            }
           }
         } else if (isSubscribed) {
           setQuiz(null);
@@ -118,6 +133,8 @@ export default function QuizTab({
         throw new Error(result.error || 'Failed to generate quiz.');
       }
 
+      console.log('[QUIZ TAB] Generated Quiz Result:', result.data);
+
       setQuiz(result.data.quiz);
       setQuestions(result.data.questions || []);
     } catch (err: any) {
@@ -126,6 +143,15 @@ export default function QuizTab({
     } finally {
       setGenerating(false);
     }
+  };
+
+  const handleStartQuiz = () => {
+    console.log('[QUIZ PLAYER DEBUG]', {
+      quizId: quiz?.id,
+      questionCount: questions?.length,
+      questions
+    });
+    setViewMode('playing');
   };
 
   return (
@@ -305,7 +331,7 @@ export default function QuizTab({
             </span>
 
             <button
-              onClick={() => setViewMode('playing')}
+              onClick={handleStartQuiz}
               className="py-3 px-7 rounded-xl bg-gradient-to-r from-indigo-500 to-cyan-500 hover:from-indigo-600 hover:to-cyan-600 text-white font-semibold text-xs transition-all duration-200 shadow-lg shadow-indigo-500/20 inline-flex items-center gap-2"
             >
               Start Quiz
