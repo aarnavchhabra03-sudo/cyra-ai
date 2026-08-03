@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { adminClient } from '@/lib/supabase/admin';
 import { gradeQuizSubmission, SubmittedAnswerItem } from '@/lib/quiz/grading';
+import { LearningInsights, updateUserConceptMastery } from '@/lib/quiz/mastery';
 
 export async function POST(request: Request) {
   // 1. Authenticate user session
@@ -183,7 +184,7 @@ export async function POST(request: Request) {
       }
     }
 
-    // 5. CHECK PREVIOUS PASS FOR IDEMPOTENT XP AWARDING
+    // 5. CHECK PREVIOUS PASS FOR IDEMPOTENT XP & MASTERY AWARDING
     const { data: prevPassedAttempt } = await adminClient
       .from('quiz_attempts')
       .select('id')
@@ -278,9 +279,26 @@ export async function POST(request: Request) {
       }
     }
 
+    // 10. UPDATE USER CONCEPT MASTERY & GENERATE ADAPTIVE INSIGHTS
+    let learningInsights: LearningInsights = {
+      strongestConcepts: [],
+      weakConcepts: [],
+      recommendations: [],
+    };
+
+    try {
+      learningInsights = await updateUserConceptMastery(
+        user.id,
+        summary.results,
+        hasPassedPreviously
+      );
+    } catch (masteryErr) {
+      console.error('[QUIZ SUBMIT] Mastery calculation error (attempt preserved):', masteryErr);
+    }
+
     console.log(`[QUIZ SUBMIT] SUCCESS: User ${user.id} scored ${summary.percentage}% (${summary.passed ? 'PASSED' : 'FAILED'}), XP: +${summary.xpAwarded}`);
 
-    // 10. RETURN SAFE FINALIZED RESULTS RESPONSE
+    // 11. RETURN SAFE FINALIZED RESULTS RESPONSE WITH LEARNING INSIGHTS
     return NextResponse.json({
       success: true,
       data: {
@@ -294,6 +312,7 @@ export async function POST(request: Request) {
         xpAwarded: summary.xpAwarded,
         durationSeconds: parsedDuration,
         results: summary.results,
+        learningInsights,
       },
     });
   } catch (error: any) {

@@ -42,6 +42,18 @@ export interface GradedResultItem {
   concept?: string | null;
 }
 
+export interface ConceptInsightItem {
+  concept: string;
+  score: number;
+  level: 'weak' | 'developing' | 'proficient' | 'mastered';
+}
+
+export interface LearningInsightsData {
+  strongestConcepts: ConceptInsightItem[];
+  weakConcepts: ConceptInsightItem[];
+  recommendations: string[];
+}
+
 export interface QuizSubmissionData {
   attemptId: string;
   percentage: number;
@@ -53,6 +65,7 @@ export interface QuizSubmissionData {
   xpAwarded: number;
   durationSeconds: number;
   results: GradedResultItem[];
+  learningInsights?: LearningInsightsData;
 }
 
 export default function QuizPlayer({ quiz, questions, onExit }: QuizPlayerProps) {
@@ -257,6 +270,58 @@ export default function QuizPlayer({ quiz, questions, onExit }: QuizPlayerProps)
               </span>
             </div>
           </div>
+
+          {/* LEARNING INSIGHTS & CONCEPT MASTERY SECTION */}
+          {submissionData.learningInsights && (
+            <div className="p-5 rounded-xl bg-zinc-950/80 border border-zinc-800 text-left space-y-3 relative z-10">
+              <div className="flex items-center gap-2 border-b border-zinc-900 pb-2.5">
+                <Sparkles className="w-4 h-4 text-cyan-400" />
+                <h4 className="text-xs font-mono font-bold uppercase tracking-wider text-cyan-400">
+                  Learning Insights & Concept Mastery
+                </h4>
+              </div>
+
+              {/* Weak / Developing Concepts */}
+              {submissionData.learningInsights.weakConcepts?.length > 0 && (
+                <div className="space-y-1.5">
+                  <span className="text-[10px] font-mono text-amber-400 uppercase font-bold block">
+                    Needs Review / Developing:
+                  </span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {submissionData.learningInsights.weakConcepts.map((item, i) => (
+                      <span key={i} className="text-[11px] font-mono px-2.5 py-1 rounded bg-amber-950/40 border border-amber-800/60 text-amber-300">
+                        {item.concept} ({item.score}%)
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Strongest Concepts */}
+              {submissionData.learningInsights.strongestConcepts?.length > 0 && (
+                <div className="space-y-1.5">
+                  <span className="text-[10px] font-mono text-emerald-400 uppercase font-bold block">
+                    Strong Concepts:
+                  </span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {submissionData.learningInsights.strongestConcepts.map((item, i) => (
+                      <span key={i} className="text-[11px] font-mono px-2.5 py-1 rounded bg-emerald-950/40 border border-emerald-800/60 text-emerald-300">
+                        {item.concept} ({item.score}%)
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Recommendations */}
+              {submissionData.learningInsights.recommendations?.length > 0 && (
+                <div className="pt-1.5 border-t border-zinc-900 space-y-1 text-xs text-zinc-300">
+                  <span className="text-[10px] font-mono text-zinc-500 uppercase block">Recommended Next Step:</span>
+                  <p className="italic text-zinc-300">{submissionData.learningInsights.recommendations[0]}</p>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Action Row */}
           <div className="pt-4 border-t border-zinc-900 flex items-center justify-center gap-3 relative z-10">
