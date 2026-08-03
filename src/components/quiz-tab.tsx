@@ -2,7 +2,6 @@
 
 import React, { useState, useEffect } from 'react';
 import { 
-  Award, 
   HelpCircle, 
   Sparkles, 
   ArrowRight, 
@@ -15,6 +14,7 @@ import {
 } from 'lucide-react';
 import { QuizRecord, SafeQuizQuestion } from '@/types/quiz';
 import { createClient } from '@/lib/supabase/client';
+import QuizPlayer from './quiz-player';
 
 interface QuizTabProps {
   activeNodeId?: string;
@@ -33,12 +33,15 @@ export default function QuizTab({
 }: QuizTabProps) {
   const [loading, setLoading] = useState<boolean>(true);
   const [generating, setGenerating] = useState<boolean>(false);
+  const [viewMode, setViewMode] = useState<'overview' | 'playing'>('overview');
   const [quiz, setQuiz] = useState<QuizRecord | null>(null);
   const [questions, setQuestions] = useState<SafeQuizQuestion[]>([]);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  // Check if a quiz already exists for the selected activeNodeId
+  // Reset player state and check if a quiz already exists for the selected activeNodeId
   useEffect(() => {
+    setViewMode('overview');
+
     if (!activeNodeId) {
       setLoading(false);
       return;
@@ -142,7 +145,12 @@ export default function QuizTab({
             return (
               <button
                 key={node.id}
-                onClick={() => !isLocked && onSelectNode(node.id)}
+                onClick={() => {
+                  if (!isLocked) {
+                    setViewMode('overview');
+                    onSelectNode(node.id);
+                  }
+                }}
                 disabled={isLocked}
                 className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all duration-200 flex items-center gap-1.5 flex-shrink-0 ${
                   isSelected
@@ -159,8 +167,16 @@ export default function QuizTab({
         </div>
       )}
 
-      {/* 2. LOADING SKELETON */}
-      {loading ? (
+      {/* 2. INTERACTIVE QUIZ PLAYER VIEW */}
+      {viewMode === 'playing' && quiz ? (
+        <QuizPlayer
+          quiz={quiz}
+          questions={questions}
+          onExit={() => setViewMode('overview')}
+        />
+      ) : loading ? (
+
+        /* 3. LOADING SKELETON */
         <div className="p-8 rounded-2xl glass-panel border border-zinc-800/80 text-center space-y-4 animate-pulse">
           <div className="w-12 h-12 rounded-xl bg-zinc-900 mx-auto flex items-center justify-center">
             <Loader2 className="w-6 h-6 text-indigo-400 animate-spin" />
@@ -169,7 +185,7 @@ export default function QuizTab({
         </div>
       ) : generating ? (
 
-        /* 3. GENERATING AI ANIMATED STATE */
+        /* 4. GENERATING AI ANIMATED STATE */
         <div className="p-10 rounded-2xl glass-panel border border-indigo-500/30 text-center space-y-6 shadow-2xl relative overflow-hidden">
           <div className="absolute inset-0 bg-gradient-to-r from-indigo-500/5 via-cyan-500/10 to-transparent animate-pulse" />
           
@@ -188,7 +204,7 @@ export default function QuizTab({
         </div>
       ) : !quiz ? (
 
-        /* 4. EMPTY STATE: NO QUIZ GENERATED YET */
+        /* 5. EMPTY STATE: NO QUIZ GENERATED YET */
         <div className="p-10 rounded-2xl glass-panel border border-zinc-800/80 text-center space-y-6 shadow-xl">
           <div className="w-16 h-16 rounded-2xl bg-zinc-900/80 border border-zinc-800 flex items-center justify-center mx-auto text-zinc-400">
             <FileQuestion className="w-8 h-8 text-indigo-400" />
@@ -218,7 +234,7 @@ export default function QuizTab({
         </div>
       ) : (
 
-        /* 5. PERSISTED QUIZ OVERVIEW CARD */
+        /* 6. PERSISTED QUIZ OVERVIEW CARD */
         <div className="p-8 rounded-2xl glass-panel border border-zinc-800/80 space-y-6 shadow-xl animate-fade-in">
           
           {/* Header & Badges */}
@@ -289,9 +305,7 @@ export default function QuizTab({
             </span>
 
             <button
-              onClick={() => {
-                alert('Quiz-taking engine will be activated in Stage 12.3!');
-              }}
+              onClick={() => setViewMode('playing')}
               className="py-3 px-7 rounded-xl bg-gradient-to-r from-indigo-500 to-cyan-500 hover:from-indigo-600 hover:to-cyan-600 text-white font-semibold text-xs transition-all duration-200 shadow-lg shadow-indigo-500/20 inline-flex items-center gap-2"
             >
               Start Quiz
