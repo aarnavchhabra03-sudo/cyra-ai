@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
+import { adminClient } from '@/lib/supabase/admin';
 import { generateAdaptiveRecommendations, ConceptMasteryRecordInput } from '@/lib/adaptive/recommendations';
 
 export async function GET() {
@@ -53,30 +54,127 @@ export async function GET() {
       last_practiced_at: row.last_practiced_at,
     }));
 
-    // 3. Concept to Lesson mapping lookup (if quiz_questions exist in DB)
+    // 3. SECURE CONCEPT -> LESSON RESOLUTION
     if (records.length > 0) {
       try {
-        const conceptsList = records.map((r) => r.concept);
-        const { data: questionMatches } = await supabase
+        const conceptsList = Array.from(new Set(records.map((r) => r.concept)));
+
+        // Query quiz_questions with adminClient to bypass table-level RLS hiding quiz_questions rows,
+        // while strictly validating learning_paths.user_id = user.id in memory.
+        const { data: questionMatches, error: matchErr } = await adminClient
           .from('quiz_questions')
-          .select('concept, quizzes!inner(lesson_id)')
+          .select(`
+            concept,
+            created_at,
+            quiz_id,
+            quizzes!inner (
+              id,
+              lesson_id,
+              created_at,
+              lessons!inner (
+                id,
+                module_id,
+                modules!inner (
+                  id,
+                  learning_path_id,
+                  learning_paths!inner (
+                    id,
+                    user_id
+                  )
+                )
+              )
+            )
+          `)
           .in('concept', conceptsList);
 
-        if (questionMatches && questionMatches.length > 0) {
-          const conceptToLessonMap = new Map<string, string>();
+        if (matchErr) {
+          console.error('[ADAPTIVE] Error querying question matches:', matchErr);
+        } else if (questionMatches && questionMatches.length > 0) {
+          // Fetch user's recent quiz attempts for deterministic ties
+          const { data: userAttempts } = await adminClient
+            .from('quiz_attempts')
+            .select('quiz_id, lesson_id, completed_at')
+            .eq('user_id', user.id)
+            .order('completed_at', { ascending: false });
+
+          const attemptRecencyMap = new Map<string, number>();
+          if (userAttempts) {
+            userAttempts.forEach((att, idx) => {
+              if (att.quiz_id && !attemptRecencyMap.has(att.quiz_id)) {
+                // Higher score for more recent attempt
+                attemptRecencyMap.set(att.quiz_id, userAttempts.length - idx);
+              }
+            });
+          }
+
+          // Map concepts to candidates
+          const conceptCandidatesMap = new Map<string, Array<{
+            lessonId: string;
+            quizId: string;
+            quizCreatedAt: string;
+            attemptRecency: number;
+          }>>();
+
           for (const qm of questionMatches as any[]) {
-            const lessonId = qm.quizzes?.lesson_id;
-            if (qm.concept && lessonId && !conceptToLessonMap.has(qm.concept)) {
-              conceptToLessonMap.set(qm.concept, lessonId);
+            const concept = qm.concept;
+            const quiz = qm.quizzes;
+            const parentUser = quiz?.lessons?.modules?.learning_paths?.user_id;
+
+            // STRICT OWNERSHIP VERIFICATION: Must belong to authenticated user
+            if (parentUser !== user.id || !quiz?.lesson_id) {
+              continue;
+            }
+
+            const candidates = conceptCandidatesMap.get(concept) || [];
+            candidates.push({
+              lessonId: quiz.lesson_id,
+              quizId: quiz.id,
+              quizCreatedAt: quiz.created_at || qm.created_at || '',
+              attemptRecency: attemptRecencyMap.get(quiz.id) || 0,
+            });
+            conceptCandidatesMap.set(concept, candidates);
+          }
+
+          // Resolve best lessonId for each concept deterministically
+          const resolvedMap = new Map<string, string>();
+
+          for (const concept of conceptsList) {
+            const candidates = conceptCandidatesMap.get(concept) || [];
+            console.log(`[ADAPTIVE] resolving concept: "${concept}"`);
+            console.log(`[ADAPTIVE] matching question rows: ${candidates.length}`);
+
+            if (candidates.length > 0) {
+              // Sort candidates:
+              // 1. User's most recent quiz attempt first
+              // 2. Most recently created quiz second
+              candidates.sort((a, b) => {
+                if (a.attemptRecency !== b.attemptRecency) {
+                  return b.attemptRecency - a.attemptRecency;
+                }
+                const timeA = new Date(a.quizCreatedAt).getTime() || 0;
+                const timeB = new Date(b.quizCreatedAt).getTime() || 0;
+                return timeB - timeA;
+              });
+
+              const candidateQuizIds = candidates.map(c => c.quizId);
+              const bestLessonId = candidates[0].lessonId;
+
+              console.log(`[ADAPTIVE] candidate quizzes:`, candidateQuizIds);
+              console.log(`[ADAPTIVE] resolved lesson: ${bestLessonId}`);
+
+              resolvedMap.set(concept, bestLessonId);
+            } else {
+              console.log(`[ADAPTIVE] candidate quizzes: []`);
+              console.log(`[ADAPTIVE] resolved lesson: null`);
             }
           }
 
           for (const rec of records) {
-            rec.lesson_id = conceptToLessonMap.get(rec.concept) || null;
+            rec.lesson_id = resolvedMap.get(rec.concept) || null;
           }
         }
       } catch (lookupErr) {
-        console.warn('[ADAPTIVE RECS] Concept-to-lesson lookup skipped:', lookupErr);
+        console.error('[ADAPTIVE] Concept-to-lesson lookup error:', lookupErr);
       }
     }
 
