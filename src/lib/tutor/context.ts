@@ -271,19 +271,20 @@ export async function buildTutorContext({
       console.warn('[TUTOR CONTEXT] Error fetching recent practice history:', practiceErr);
     }
 
-    // 5. CHECK ACTIVE ASSESSMENT STATUS
-    if (lessonId) {
+    // 5. CHECK ACTIVE ASSESSMENT STATUS (RELIABLE ACTIVE PRACTICE SESSION DETECTION)
+    try {
       const { data: activePractice } = await adminClient
         .from('adaptive_practice_sessions')
         .select('id')
         .eq('user_id', userId)
-        .eq('lesson_id', lessonId)
         .eq('status', 'active')
         .maybeSingle();
 
       if (activePractice) {
         context.hasActiveAssessment = true;
       }
+    } catch (activeErr) {
+      console.warn('[TUTOR CONTEXT] Error checking active assessment status:', activeErr);
     }
   } catch (err) {
     console.error('[TUTOR CONTEXT] Error building tutor context:', err);
