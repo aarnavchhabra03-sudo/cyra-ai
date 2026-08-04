@@ -5,6 +5,8 @@ import { gradeQuizSubmission, SubmittedAnswerItem } from '@/lib/quiz/grading';
 import { updateUserConceptMastery } from '@/lib/quiz/mastery';
 
 export async function POST(request: Request) {
+  console.log('[PRACTICE SUBMIT] request received');
+
   // 1. Authenticate user session
   let user;
   try {
@@ -12,6 +14,7 @@ export async function POST(request: Request) {
     const { data: authData, error: authError } = await supabase.auth.getUser();
 
     if (authError || !authData?.user) {
+      console.warn('[PRACTICE SUBMIT] Auth failed:', authError);
       return NextResponse.json(
         {
           success: false,
@@ -22,7 +25,9 @@ export async function POST(request: Request) {
       );
     }
     user = authData.user;
+    console.log('[PRACTICE SUBMIT] authenticated user:', user.id);
   } catch (err) {
+    console.error('[PRACTICE SUBMIT] Auth exception:', err);
     return NextResponse.json(
       {
         success: false,
@@ -38,6 +43,7 @@ export async function POST(request: Request) {
   try {
     body = await request.json();
   } catch {
+    console.warn('[PRACTICE SUBMIT] Invalid JSON payload');
     return NextResponse.json(
       {
         success: false,
@@ -49,6 +55,8 @@ export async function POST(request: Request) {
   }
 
   const { sessionId, answers, durationSeconds = 0 } = body || {};
+
+  console.log('[PRACTICE SUBMIT] parsed payload for sessionId:', sessionId, 'answers count:', Array.isArray(answers) ? answers.length : 0);
 
   if (!sessionId || typeof sessionId !== 'string' || !Array.isArray(answers)) {
     return NextResponse.json(
@@ -98,6 +106,7 @@ export async function POST(request: Request) {
       .single();
 
     if (sessionErr || !sessionRecord) {
+      console.warn('[PRACTICE SUBMIT] Session lookup failed:', sessionErr);
       return NextResponse.json(
         {
           success: false,
@@ -108,7 +117,10 @@ export async function POST(request: Request) {
       );
     }
 
+    console.log('[PRACTICE SUBMIT] session lookup success:', sessionRecord.id, 'status:', sessionRecord.status);
+
     if (sessionRecord.user_id !== user.id) {
+      console.warn('[PRACTICE SUBMIT] Unauthorized session access attempt by user:', user.id);
       return NextResponse.json(
         {
           success: false,
@@ -119,8 +131,11 @@ export async function POST(request: Request) {
       );
     }
 
-    // IDEMPOTENCY CHECK: If already completed, return existing attempt to prevent double updates
+    console.log('[PRACTICE SUBMIT] ownership verified for user:', user.id);
+
+    // IDEMPOTENCY CHECK: If already completed, return existing attempt safely
     if (sessionRecord.status === 'completed') {
+      console.log('[PRACTICE SUBMIT] Session already completed. Returning existing attempt record.');
       const { data: existingAttempt } = await adminClient
         .from('adaptive_practice_attempts')
         .select('*')
@@ -167,10 +182,13 @@ export async function POST(request: Request) {
       );
     }
 
-    // AUDIT ITEM 9: VERIFY ALL SUBMITTED QUESTION IDS BELONG TO THIS SESSION
+    console.log('[PRACTICE SUBMIT] questions loaded:', dbQuestions.length);
+
+    // VERIFY ALL SUBMITTED QUESTION IDS BELONG TO THIS SESSION
     const validQuestionIds = new Set(dbQuestions.map(q => q.id));
     for (const qId of seenQuestionIds) {
       if (!validQuestionIds.has(qId)) {
+        console.warn(`[PRACTICE SUBMIT] Foreign questionId ${qId} rejected for session ${sessionId}`);
         return NextResponse.json(
           {
             success: false,
@@ -183,18 +201,24 @@ export async function POST(request: Request) {
     }
 
     // 5. PERFORM SERVER-SIDE DETERMINISTIC GRADING
+    console.log('[PRACTICE SUBMIT] grading started');
     const summary = gradeQuizSubmission(
       dbQuestions,
       answers,
       70, // 70% passing threshold
       false
     );
+    console.log('[PRACTICE SUBMIT] grading completed: score =', summary.earnedPoints, 'percentage =', summary.percentage);
 
     // 6. UPDATE CONCEPT MASTERY USING STAGE 12.4 ENGINE
     const masteryBefore = sessionRecord.mastery_before || 0;
     
-    // Update mastery via updateUserConceptMastery
-    await updateUserConceptMastery(user.id, summary.results, false);
+    try {
+      await updateUserConceptMastery(user.id, summary.results, false);
+      console.log('[PRACTICE SUBMIT] mastery updated');
+    } catch (mErr) {
+      console.error('[PRACTICE SUBMIT] Mastery calculation error (attempt preserved):', mErr);
+    }
 
     // Fetch new mastery score after update
     const { data: updatedMasteryRow } = await adminClient
@@ -202,21 +226,26 @@ export async function POST(request: Request) {
       .select('mastery_score')
       .eq('user_id', user.id)
       .eq('concept', sessionRecord.concept)
-      .single();
+      .maybeSingle();
 
     const masteryAfter = updatedMasteryRow?.mastery_score ?? masteryBefore;
     const masteryChange = masteryAfter - masteryBefore;
 
     // 7. MARK PRACTICE SESSION COMPLETED
+    const now = new Date();
+    const completedAtIso = now.toISOString();
+    const startedAtIso = new Date(now.getTime() - parsedDuration * 1000).toISOString();
+
     await adminClient
       .from('adaptive_practice_sessions')
       .update({
         status: 'completed',
-        completed_at: new Date().toISOString(),
+        completed_at: completedAtIso,
       })
       .eq('id', sessionId);
+    console.log('[PRACTICE SUBMIT] session completed');
 
-    // 8. PERSIST PRACTICE ATTEMPT RECORD
+    // 8. PERSIST PRACTICE ATTEMPT RECORD WITH GUARANTEED started_at <= completed_at
     const { data: attemptRecord, error: attemptErr } = await adminClient
       .from('adaptive_practice_attempts')
       .insert({
@@ -227,8 +256,9 @@ export async function POST(request: Request) {
         passed: summary.passed,
         mastery_before: masteryBefore,
         mastery_after: masteryAfter,
+        started_at: startedAtIso,
+        completed_at: completedAtIso,
         duration_seconds: parsedDuration,
-        completed_at: new Date().toISOString(),
       })
       .select()
       .single();
@@ -238,12 +268,14 @@ export async function POST(request: Request) {
       return NextResponse.json(
         {
           success: false,
-          error: 'Failed to record practice attempt in database.',
+          error: `Failed to record practice attempt in database: ${attemptErr?.message || 'Unknown DB error'}`,
           code: 'DB_ATTEMPT_FAILED',
         },
         { status: 500 }
       );
     }
+
+    console.log('[PRACTICE SUBMIT] attempt inserted successfully:', attemptRecord.id);
 
     // 9. PERSIST ITEMIZED PRACTICE ANSWERS IN BATCH
     const answerRows = summary.results.map((r) => ({
@@ -254,9 +286,17 @@ export async function POST(request: Request) {
       points_earned: r.pointsEarned,
     }));
 
-    await adminClient.from('adaptive_practice_answers').insert(answerRows);
+    const { error: answersErr } = await adminClient
+      .from('adaptive_practice_answers')
+      .insert(answerRows);
 
-    console.log(`[PRACTICE SUBMIT] SUCCESS: User ${user.id} practiced "${sessionRecord.concept}" (${summary.percentage}%), Mastery: ${masteryBefore}% -> ${masteryAfter}% (${masteryChange >= 0 ? '+' : ''}${masteryChange}%)`);
+    if (answersErr) {
+      console.error('[PRACTICE SUBMIT] Error inserting practice answers:', answersErr);
+    } else {
+      console.log('[PRACTICE SUBMIT] answers inserted successfully');
+    }
+
+    console.log(`[PRACTICE SUBMIT] response returned: User ${user.id} practiced "${sessionRecord.concept}" (${summary.percentage}%), Mastery: ${masteryBefore}% -> ${masteryAfter}%`);
 
     // 10. RETURN SAFE RESULTS RESPONSE
     return NextResponse.json({
@@ -280,7 +320,7 @@ export async function POST(request: Request) {
     return NextResponse.json(
       {
         success: false,
-        error: 'An unexpected server error occurred during practice submission.',
+        error: error?.message || 'An unexpected server error occurred during practice submission.',
         code: 'SERVER_ERROR',
       },
       { status: 500 }

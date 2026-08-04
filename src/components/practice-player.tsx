@@ -142,6 +142,9 @@ export default function PracticePlayer({
   const handleSubmitPractice = async () => {
     if (isSubmitting) return;
 
+    console.log('[PRACTICE CLIENT] submit clicked');
+    console.log('[PRACTICE CLIENT] sessionId:', sessionId);
+
     setIsSubmitting(true);
     setSubmitError(null);
 
@@ -149,6 +152,8 @@ export default function PracticePlayer({
       questionId: qId,
       selectedAnswer: val,
     }));
+
+    console.log('[PRACTICE CLIENT] answers:', formattedAnswers);
 
     const durationSeconds = Math.max(1, Math.round((Date.now() - startTime) / 1000));
 
@@ -163,7 +168,9 @@ export default function PracticePlayer({
         }),
       });
 
+      console.log('[PRACTICE CLIENT] response status:', res.status);
       const result = await res.json();
+      console.log('[PRACTICE CLIENT] response:', result);
 
       if (!res.ok || !result.success) {
         throw new Error(result.error || 'Failed to submit practice session for grading.');
@@ -172,8 +179,8 @@ export default function PracticePlayer({
       setSubmissionData(result.data);
       setViewMode('results');
     } catch (err: any) {
-      console.error('[PRACTICE PLAYER] Submission error:', err);
-      setSubmitError(err.message || 'An unexpected error occurred during practice submission.');
+      console.error('[PRACTICE CLIENT] Submission error:', err);
+      setSubmitError(err.message || 'Practice submission failed. Please try again.');
     } finally {
       setIsSubmitting(false);
     }
@@ -336,11 +343,19 @@ export default function PracticePlayer({
         />
       </div>
 
-      {/* ERROR BANNER */}
+      {/* ERROR BANNER VISIBLE AT TOP OF GAME CARD IF SUBMISSION FAILS */}
       {submitError && (
-        <div className="p-3.5 rounded-xl bg-red-950/40 border border-red-900/50 text-red-300 text-xs flex items-center gap-2">
-          <AlertCircle className="w-4 h-4 flex-shrink-0 text-red-400" />
-          <span>{submitError}</span>
+        <div className="p-4 rounded-xl bg-red-950/80 border border-red-500/50 text-red-200 text-xs flex items-center justify-between gap-3 shadow-lg animate-fade-in">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 flex-shrink-0 text-red-400" />
+            <span>{submitError}</span>
+          </div>
+          <button
+            onClick={() => setSubmitError(null)}
+            className="text-[10px] font-mono text-red-400 hover:text-white underline"
+          >
+            Dismiss
+          </button>
         </div>
       )}
 

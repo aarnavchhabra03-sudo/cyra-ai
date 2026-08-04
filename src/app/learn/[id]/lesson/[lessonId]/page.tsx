@@ -15,10 +15,12 @@ import {
   ChevronRight,
   AlertTriangle,
   Loader2,
-  Lock
+  Lock,
+  Bot
 } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import LessonContentRenderer from '@/components/lesson-content-renderer';
+import TutorTab from '@/components/tutor-tab';
 
 interface FlatLesson {
   id: string;
@@ -146,7 +148,7 @@ export default function LessonPage() {
 
         const moduleIds = modulesData.map(m => m.id);
 
-        // 4. Fetch All Lessons for these Modules (select '*' to match PostgREST schema)
+        // 4. Fetch All Lessons for these Modules
         const { data: lessonsData, error: lessonsErr } = await supabase
           .from('lessons')
           .select('*')
@@ -300,6 +302,7 @@ export default function LessonPage() {
     } catch (err) {
       console.error('Error updating lesson progress:', err);
     } finally {
+      setIsCompleted(nextCompleted);
       setTogglingProgress(false);
     }
   };
@@ -416,6 +419,15 @@ export default function LessonPage() {
           </div>
 
           <LessonContentRenderer content={lessonContent} />
+        </div>
+
+        {/* ── Context-Aware AI Tutor Assistant Section ────────────────── */}
+        <div className="space-y-3 pt-4">
+          <div className="flex items-center gap-2 px-1">
+            <Sparkles className="w-4 h-4 text-indigo-400" />
+            <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-300">Context-Aware AI Tutor</h3>
+          </div>
+          <TutorTab lessonId={lessonId} />
         </div>
 
         {/* ── Lesson Navigation & Completion Footer ──────────────────── */}

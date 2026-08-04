@@ -8,29 +8,55 @@ import {
   HelpCircle, 
   MessageSquare,
   ArrowRight,
-  TrendingUp
+  TrendingUp,
+  AlertCircle,
+  BookOpen,
+  Zap,
+  ChevronDown,
+  ChevronUp,
+  RefreshCw
 } from 'lucide-react';
-import { ChatMessage, mockChatMessages } from '@/data/mockData';
 
-interface TutorTabProps {
-  initialContext?: string; // Pre-populated search query or note topic
+export interface ChatMessage {
+  id: string;
+  sender: 'user' | 'assistant';
+  content: string;
+  timestamp: string;
 }
 
-export default function TutorTab({ initialContext }: TutorTabProps) {
-  const [messages, setMessages] = useState<ChatMessage[]>(mockChatMessages);
+export interface LearnerContextSummary {
+  lessonTitle: string;
+  primaryWeakConcept?: string | null;
+  masteryScore?: number | null;
+  hasActiveAssessment?: boolean;
+  weakConcepts?: Array<{ concept: string; masteryScore: number }>;
+  masteredConcepts?: Array<{ concept: string; masteryScore: number }>;
+}
+
+interface TutorTabProps {
+  lessonId?: string;
+  initialContext?: string;
+}
+
+export default function TutorTab({ lessonId, initialContext }: TutorTabProps) {
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [isTyping, setIsTyping] = useState(false);
+  const [conversationId, setConversationId] = useState<string | null>(null);
+  const [learnerContext, setLearnerContext] = useState<LearnerContextSummary | null>(null);
+  const [showIntelligence, setShowIntelligence] = useState<boolean>(true);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Suggested quick prompts
+  // Suggested quick prompts & modes
   const suggestedPrompts = [
-    "Explain Page Faults simply",
-    "What is Belady's anomaly?",
-    "Give me an example of a deadlock condition",
-    "Compare mutexes vs semaphores"
+    { label: "Explain this simply", mode: "SIMPLIFY" },
+    { label: "Give me an analogy", mode: "ANALOGY" },
+    { label: "Review my weak concepts", mode: "REVIEW_WEAKNESS" },
+    { label: "Quiz me on this", mode: "QUIZ_ME" },
+    { label: "Socratic guidance", mode: "SOCRATIC" },
   ];
 
-  // Auto-scroll to bottom of chat
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
@@ -39,20 +65,79 @@ export default function TutorTab({ initialContext }: TutorTabProps) {
     scrollToBottom();
   }, [messages, isTyping]);
 
-  // Set initial context if provided
+  // Load existing conversation & context on mount
+  useEffect(() => {
+    async function loadInitialTutorData() {
+      try {
+        const query = lessonId ? `?lessonId=${encodeURIComponent(lessonId)}` : '';
+        const res = await fetch(`/api/ai/tutor${query}`);
+        const result = await res.json();
+
+        if (res.ok && result.success && result.data) {
+          if (result.data.conversationId) {
+            setConversationId(result.data.conversationId);
+          }
+
+          if (result.data.context) {
+            setLearnerContext(result.data.context);
+          }
+
+          if (Array.isArray(result.data.messages) && result.data.messages.length > 0) {
+            const formatted: ChatMessage[] = result.data.messages.map((m: any) => ({
+              id: m.id || `m-${Date.now()}-${Math.random()}`,
+              sender: m.role === 'assistant' ? 'assistant' : 'user',
+              content: m.content,
+              timestamp: m.created_at ? new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '',
+            }));
+            setMessages(formatted);
+          } else {
+            // Context-Aware Personalized Starter Welcome Message
+            const weak = result.data.context?.primaryWeakConcept;
+            const score = result.data.context?.masteryScore;
+            const lTitle = result.data.context?.lessonTitle || 'this course';
+
+            let welcomeText = `Hello! I am your **CYRA AI Tutor**. I'm here to help you study **${lTitle}**.`;
+            if (weak && score !== null && score !== undefined) {
+              welcomeText += `\n\nI noticed you currently have **${score}% mastery** in **${weak}**. Would you like me to explain this concept simply, offer an analogy, or review your weak areas?`;
+            } else {
+              welcomeText += `\n\nAsk me any question about the lesson, concepts, or practice problems to get started!`;
+            }
+
+            setMessages([
+              {
+                id: 'welcome-msg',
+                sender: 'assistant',
+                content: welcomeText,
+                timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+              },
+            ]);
+          }
+        }
+      } catch (err) {
+        console.error('[TUTOR TAB] Error loading initial tutor session:', err);
+      }
+    }
+
+    loadInitialTutorData();
+  }, [lessonId]);
+
+  // Set initial context if provided via props
   useEffect(() => {
     if (initialContext) {
-      setInputValue(`I am studying the section on "${initialContext}". Can you explain it in more detail?`);
+      setInputValue(`I am studying "${initialContext}". Can you explain it in more detail?`);
     }
   }, [initialContext]);
 
-  const handleSendMessage = (textToSend: string) => {
-    if (!textToSend.trim()) return;
+  const handleSendMessage = async (textToSend: string, modeHint?: string) => {
+    const trimmed = textToSend.trim();
+    if (!trimmed || isTyping) return;
+
+    setErrorMsg(null);
 
     const userMsg: ChatMessage = {
       id: `m-usr-${Date.now()}`,
       sender: 'user',
-      content: textToSend,
+      content: trimmed,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     };
 
@@ -60,31 +145,56 @@ export default function TutorTab({ initialContext }: TutorTabProps) {
     setInputValue('');
     setIsTyping(true);
 
-    // Simulate AI thinking and replying
-    setTimeout(() => {
-      let aiContent = "That's an interesting question about Operating Systems! Let me break it down for you. In OS design, we balance performance, complexity, and hardware safety. Would you like me to generate a summary or a quiz question on this topic?";
-      
-      const query = textToSend.toLowerCase();
-      if (query.includes('page fault') || query.includes('paging')) {
-        aiContent = "A **Page Fault** is an interrupt raised by the hardware MMU when a program tries to access a virtual page that is not currently mapped into physical RAM (its 'present bit' in the Page Table Entry is 0).\n\nWhen this occurs:\n1. The CPU traps into the kernel Page Fault Handler.\n2. The OS allocates a physical frame, reads the missing page from disk swap space into RAM.\n3. The OS updates the page table entry (sets present bit to 1).\n4. The OS restarts the instruction that caused the fault.";
-      } else if (query.includes('belady') || query.includes('anomaly')) {
-        aiContent = "**Belady's Anomaly** is a famous phenomenon where allocating more physical page frames results in *more* page faults for certain access patterns.\n\nIt occurs primarily in the **FIFO (First-In, First-Out)** page replacement algorithm. Because FIFO simply evicts the oldest page without checking access frequency, adding memory frames can shift the page queue state in a way that evicts highly needed pages. Stack algorithms like **LRU (Least Recently Used)** do not suffer from Belady's Anomaly.";
-      } else if (query.includes('deadlock')) {
-        aiContent = "A **Deadlock** is a state where a set of processes are blocked because each process holds a resource and waits for another resource held by another process.\n\nFor a deadlock to occur, **Coffman's Four Conditions** must hold simultaneously:\n1. **Mutual Exclusion**: Resources cannot be shared.\n2. **Hold and Wait**: Processes holding resources can request new ones.\n3. **No Preemption**: Resources cannot be forcibly taken.\n4. **Circular Wait**: A closed loop of processes waiting for each other.";
-      } else if (query.includes('mutex') || query.includes('semaphore')) {
-        aiContent = "Here is the core difference between **Mutexes** and **Semaphores**:\n\n- **Mutex (Mutual Exclusion Lock)**: Has an ownership model. Only the thread that locked the mutex can unlock it. It is binary (locked/unlocked) and used to protect critical sections.\n- **Semaphore**: A generalized counter variable. It does not have an ownership model (any thread can signal/post a semaphore). Can be binary (0 or 1) or counting (0 to N), allowing up to N threads to access a resource concurrently.";
+    try {
+      const res = await fetch('/api/ai/tutor', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          lessonId,
+          conversationId,
+          message: trimmed,
+          mode: modeHint,
+        }),
+      });
+
+      const result = await res.json();
+
+      if (!res.ok || !result.success || !result.data) {
+        throw new Error(result.error || 'Failed to get tutor response.');
+      }
+
+      if (result.data.conversationId) {
+        setConversationId(result.data.conversationId);
+      }
+
+      if (result.data.context) {
+        setLearnerContext(prev => ({
+          ...prev,
+          ...result.data.context,
+        }));
       }
 
       const aiMsg: ChatMessage = {
         id: `m-ai-${Date.now()}`,
         sender: 'assistant',
-        content: aiContent,
+        content: result.data.message.content,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
       };
 
-      setIsTyping(false);
       setMessages(prev => [...prev, aiMsg]);
-    }, 1500);
+    } catch (err: any) {
+      console.error('[TUTOR TAB] Error sending message:', err);
+      setErrorMsg(err.message || 'Tutor connection failed. Please try again.');
+    } finally {
+      setIsTyping(false);
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSendMessage(inputValue);
+    }
   };
 
   const handleFormSubmit = (e: React.FormEvent) => {
@@ -93,9 +203,9 @@ export default function TutorTab({ initialContext }: TutorTabProps) {
   };
 
   return (
-    <div className="flex flex-col h-[520px] rounded-2xl glass-panel border border-zinc-800/80 overflow-hidden shadow-xl">
-      {/* Tutor Banner */}
-      <div className="p-4 bg-zinc-950/40 border-b border-zinc-900 flex items-center justify-between">
+    <div className="flex flex-col h-[620px] rounded-2xl glass-panel border border-zinc-800/80 overflow-hidden shadow-xl relative">
+      {/* 1. TUTOR HEADER BANNER */}
+      <div className="p-4 bg-zinc-950/60 border-b border-zinc-900 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 rounded-lg bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400">
             <Bot className="w-4.5 h-4.5" />
@@ -105,24 +215,79 @@ export default function TutorTab({ initialContext }: TutorTabProps) {
               CYRA AI Tutor
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shadow-[0_0_8px_#10b981]" />
             </span>
-            <p className="text-[9px] text-zinc-500 font-mono">Model: Gemini 1.5 Flash (Synthesizer Context)</p>
+            <p className="text-[10px] text-zinc-400 font-mono">
+              {learnerContext?.lessonTitle ? `Active Lesson: ${learnerContext.lessonTitle}` : 'General Educational Assistant'}
+            </p>
           </div>
         </div>
-        
-        <div className="flex items-center gap-1 text-[9px] font-mono text-zinc-500">
-          <Sparkles className="w-3 h-3 text-cyan-400" />
-          <span>Active Context: Memory & Paging</span>
+
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowIntelligence(prev => !prev)}
+            className="text-[10px] font-mono text-cyan-400 bg-cyan-950/40 px-2.5 py-1 rounded-md border border-cyan-500/30 flex items-center gap-1 hover:bg-cyan-900/40 transition-colors"
+          >
+            <Sparkles className="w-3 h-3 text-cyan-400" />
+            <span>CYRA KNOWS</span>
+            {showIntelligence ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+          </button>
         </div>
       </div>
 
-      {/* Messages Scroll Area */}
-      <div className="flex-1 p-5 overflow-y-auto space-y-4 bg-zinc-950/10 scrollbar">
+      {/* 2. COLLAPSIBLE LEARNER INTELLIGENCE PANEL */}
+      {showIntelligence && learnerContext && (
+        <div className="bg-zinc-950/90 border-b border-zinc-800/80 p-3.5 space-y-2 text-xs animate-fade-in">
+          <div className="flex items-center justify-between text-[10px] font-mono text-zinc-400 uppercase border-b border-zinc-900 pb-1">
+            <span>Adaptive Learner Profile</span>
+            {learnerContext.hasActiveAssessment && (
+              <span className="text-amber-400 flex items-center gap-1 font-bold">
+                <AlertCircle className="w-3 h-3" /> Active Assessment Mode
+              </span>
+            )}
+          </div>
+
+          <div className="grid grid-cols-2 gap-2 text-[11px]">
+            <div className="p-2 rounded bg-zinc-900/50 border border-zinc-850 space-y-0.5">
+              <span className="text-[9px] font-mono text-amber-400 uppercase font-bold block">Needs Review:</span>
+              <p className="text-zinc-200 font-medium">
+                {learnerContext.primaryWeakConcept 
+                  ? `${learnerContext.primaryWeakConcept} (${learnerContext.masteryScore}%)` 
+                  : 'No critical weak concepts'}
+              </p>
+            </div>
+
+            <div className="p-2 rounded bg-zinc-900/50 border border-zinc-850 space-y-0.5">
+              <span className="text-[9px] font-mono text-emerald-400 uppercase font-bold block">Strong Concepts:</span>
+              <p className="text-zinc-200 font-medium">
+                {learnerContext.masteredConcepts && learnerContext.masteredConcepts.length > 0
+                  ? `${learnerContext.masteredConcepts[0].concept} (${learnerContext.masteredConcepts[0].masteryScore}%)`
+                  : 'Building mastery baseline...'}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ERROR BANNER */}
+      {errorMsg && (
+        <div className="p-3 bg-red-950/60 border-b border-red-900/50 text-red-300 text-xs flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 text-red-400 flex-shrink-0" />
+            <span>{errorMsg}</span>
+          </div>
+          <button onClick={() => setErrorMsg(null)} className="text-[10px] text-red-400 hover:text-white underline">
+            Dismiss
+          </button>
+        </div>
+      )}
+
+      {/* 3. MESSAGES SCROLL AREA */}
+      <div className="flex-1 p-5 overflow-y-auto space-y-4 bg-zinc-950/20 scrollbar">
         {messages.map((msg) => {
           const isAi = msg.sender === 'assistant';
           return (
             <div 
               key={msg.id}
-              className={`flex items-start gap-3 max-w-[85%] ${isAi ? 'mr-auto' : 'ml-auto flex-row-reverse'}`}
+              className={`flex items-start gap-3 max-w-[88%] ${isAi ? 'mr-auto' : 'ml-auto flex-row-reverse'}`}
             >
               {/* Avatar */}
               <div className={`w-7 h-7 rounded-full flex-shrink-0 flex items-center justify-center font-bold text-xs border ${
@@ -137,39 +302,23 @@ export default function TutorTab({ initialContext }: TutorTabProps) {
               <div className="space-y-1">
                 <div className={`p-3.5 rounded-2xl text-xs leading-relaxed ${
                   isAi 
-                    ? 'bg-zinc-900/60 border border-zinc-900 text-zinc-300 rounded-tl-sm' 
-                    : 'bg-indigo-600 text-white rounded-tr-sm'
+                    ? 'bg-zinc-900/70 border border-zinc-800 text-zinc-200 rounded-tl-sm shadow-md' 
+                    : 'bg-indigo-600 text-white rounded-tr-sm shadow-md'
                 }`}>
-                  {/* Parse markdown-like content blocks in responses */}
-                  {msg.content.split('\n\n').map((para, pIdx) => {
-                    // Check if it is a list block
-                    if (para.startsWith('1. ') || para.startsWith('- ') || para.includes('\n1. ') || para.includes('\n- ')) {
-                      return (
-                        <div key={pIdx} className="my-1.5 space-y-1">
-                          {para.split('\n').map((line, lIdx) => {
-                            if (line.startsWith('1. ') || /^\d+\.\s/.test(line)) {
-                              return <div key={lIdx} className="pl-3 text-[11px] text-zinc-300">{line}</div>;
-                            }
-                            if (line.startsWith('- ') || line.startsWith('* ')) {
-                              return <div key={lIdx} className="pl-3 text-[11px] text-zinc-300">• {line.substring(2)}</div>;
-                            }
-                            return <div key={lIdx} className="text-zinc-300 font-bold mt-1 text-[11px]">{line}</div>;
-                          })}
-                        </div>
-                      );
-                    }
-                    return (
-                      <p key={pIdx} className="mb-2 last:mb-0">
-                        {para.split('**').map((part, partIdx) => {
-                          return partIdx % 2 === 1 ? <strong key={partIdx} className="font-bold text-white">{part}</strong> : part;
-                        })}
-                      </p>
-                    );
-                  })}
+                  {/* Parse markdown-like paragraphs & bold syntax */}
+                  {msg.content.split('\n\n').map((para, pIdx) => (
+                    <p key={pIdx} className="mb-2 last:mb-0">
+                      {para.split('**').map((part, partIdx) => 
+                        partIdx % 2 === 1 ? <strong key={partIdx} className="font-bold text-white">{part}</strong> : part
+                      )}
+                    </p>
+                  ))}
                 </div>
-                <div className={`text-[8px] font-mono text-zinc-500 ${!isAi ? 'text-right' : ''}`}>
-                  {msg.timestamp}
-                </div>
+                {msg.timestamp && (
+                  <div className={`text-[8px] font-mono text-zinc-500 ${!isAi ? 'text-right' : ''}`}>
+                    {msg.timestamp}
+                  </div>
+                )}
               </div>
             </div>
           );
@@ -178,13 +327,13 @@ export default function TutorTab({ initialContext }: TutorTabProps) {
         {/* Thinking / Typing indicator */}
         {isTyping && (
           <div className="flex items-start gap-3 mr-auto">
-            <div className="w-7 h-7 rounded-full flex-shrink-0 bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 flex items-center justify-center text-xs">
+            <div className="w-7 h-7 rounded-full flex-shrink-0 bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 flex items-center justify-center text-xs font-bold">
               C
             </div>
-            <div className="p-3 bg-zinc-900/60 border border-zinc-900 rounded-2xl rounded-tl-sm flex items-center gap-1">
-              <span className="w-1.5 h-1.5 rounded-full bg-zinc-400 animate-bounce" style={{ animationDelay: '0ms' }} />
-              <span className="w-1.5 h-1.5 rounded-full bg-zinc-400 animate-bounce" style={{ animationDelay: '150ms' }} />
-              <span className="w-1.5 h-1.5 rounded-full bg-zinc-400 animate-bounce" style={{ animationDelay: '300ms' }} />
+            <div className="p-3 bg-zinc-900/60 border border-zinc-900 rounded-2xl rounded-tl-sm flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-bounce" style={{ animationDelay: '0ms' }} />
+              <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-bounce" style={{ animationDelay: '150ms' }} />
+              <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-bounce" style={{ animationDelay: '300ms' }} />
             </div>
           </div>
         )}
@@ -192,34 +341,36 @@ export default function TutorTab({ initialContext }: TutorTabProps) {
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Suggested Quick Question Row (only show when chat isn't busy) */}
+      {/* 4. SUGGESTED TEACHING MODES & QUICK ACTION PILLS */}
       {!isTyping && (
-        <div className="px-4 py-2 border-t border-zinc-900 bg-zinc-950/20 flex gap-2 overflow-x-auto select-none scrollbar-none whitespace-nowrap">
-          {suggestedPrompts.map((prompt) => (
+        <div className="px-4 py-2 border-t border-zinc-900 bg-zinc-950/40 flex gap-2 overflow-x-auto select-none scrollbar-none whitespace-nowrap">
+          {suggestedPrompts.map((p) => (
             <button
-              key={prompt}
-              onClick={() => handleSendMessage(prompt)}
-              className="text-[10px] px-3 py-1.5 rounded-full bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 border border-zinc-800 transition-colors inline-block whitespace-nowrap"
+              key={p.label}
+              onClick={() => handleSendMessage(p.label, p.mode)}
+              className="text-[10px] px-3 py-1 rounded-full bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white border border-zinc-800 transition-colors inline-flex items-center gap-1"
             >
-              {prompt}
+              <Zap className="w-3 h-3 text-cyan-400" />
+              {p.label}
             </button>
           ))}
         </div>
       )}
 
-      {/* Message Input Form */}
-      <form onSubmit={handleFormSubmit} className="p-3 bg-zinc-950/40 border-t border-zinc-900 flex items-center gap-2">
-        <input 
-          type="text" 
+      {/* 5. MESSAGE INPUT FORM */}
+      <form onSubmit={handleFormSubmit} className="p-3 bg-zinc-950/60 border-t border-zinc-900 flex items-center gap-2">
+        <textarea 
+          rows={1}
           placeholder="Ask CYRA AI tutor a question about this course..." 
           value={inputValue}
           onChange={(e) => setInputValue(e.target.value)}
-          className="flex-1 bg-zinc-900/60 border border-zinc-800/80 rounded-xl px-4 py-2.5 text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-indigo-500/50"
+          onKeyDown={handleKeyDown}
+          className="flex-1 bg-zinc-900/80 border border-zinc-800 rounded-xl px-4 py-2.5 text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-indigo-500/60 resize-none"
         />
         <button 
           type="submit"
           disabled={!inputValue.trim() || isTyping}
-          className="p-2.5 rounded-xl bg-indigo-500 text-white disabled:opacity-50 disabled:pointer-events-none hover:bg-indigo-600 transition-colors shadow-md shadow-indigo-500/10"
+          className="p-2.5 rounded-xl bg-gradient-to-r from-indigo-500 to-cyan-500 hover:from-indigo-600 hover:to-cyan-600 text-white disabled:opacity-50 disabled:pointer-events-none transition-colors shadow-md flex-shrink-0"
         >
           <Send className="w-4 h-4" />
         </button>
