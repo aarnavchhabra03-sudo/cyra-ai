@@ -5,6 +5,7 @@ import { getAIProvider } from '@/lib/ai/provider';
 import { buildTutorContext, resolvePrimaryTargetConcept } from '@/lib/tutor/context';
 import { buildTutorSystemPrompt, isAnswerExtractionAttempt } from '@/lib/tutor/prompt';
 import { extractTutorMemoryCandidates, persistTutorMemories } from '@/lib/tutor/memory';
+import { selectTeachingStrategy } from '@/lib/tutor/strategy';
 
 export async function GET(request: Request) {
   console.log('[TUTOR] GET request received');
@@ -57,10 +58,12 @@ export async function GET(request: Request) {
 
     // Load or find active conversation
     let targetConvId = conversationId;
+    let resolvedLessonId = lessonId || null;
+
     if (targetConvId) {
       const { data: existingConv } = await adminClient
         .from('ai_tutor_conversations')
-        .select('id, user_id')
+        .select('id, user_id, lesson_id')
         .eq('id', targetConvId)
         .maybeSingle();
 
@@ -73,6 +76,9 @@ export async function GET(request: Request) {
           },
           { status: 403 }
         );
+      }
+      if (existingConv.lesson_id) {
+        resolvedLessonId = existingConv.lesson_id;
       }
     } else if (lessonId) {
       const { data: existingConv } = await adminClient
@@ -99,11 +105,12 @@ export async function GET(request: Request) {
       messages = dbMessages || [];
     }
 
-    // Build tutor context & resolve target concept
-    const context = await buildTutorContext({ userId: user.id, lessonId });
+    // Build tutor context & select teaching strategy
+    const context = await buildTutorContext({ userId: user.id, lessonId: resolvedLessonId });
     const target = resolvePrimaryTargetConcept(context);
+    const plan = selectTeachingStrategy(context, '', undefined);
 
-    console.log('[TUTOR] context built, target concept:', target.concept, 'mastery:', target.masteryScore, 'memories:', context.tutorMemories.length);
+    console.log('[TUTOR] context built, target concept:', target.concept, 'strategy:', plan.strategy, 'reasons:', plan.rationaleCodes);
 
     return NextResponse.json({
       success: true,
@@ -125,6 +132,10 @@ export async function GET(request: Request) {
           memoryCount: context.tutorMemories.length,
           memoryEnabled: true,
           tutorMemories: context.tutorMemories,
+          teachingStrategy: plan.strategy,
+          targetConcept: plan.targetConcept,
+          explanationDepth: plan.explanationDepth,
+          strategyReasons: plan.rationaleCodes,
         },
       },
     });
@@ -227,12 +238,14 @@ export async function POST(request: Request) {
     }
     console.log('[TUTOR] ownership verified');
 
-    // 4. LOAD OR CREATE CONVERSATION RECORD
+    // 4. LOAD OR CREATE CONVERSATION RECORD & RESOLVE PROVENANCE LESSON ID
     let convId = conversationId;
+    let validatedLessonId = lessonId || null;
+
     if (convId) {
       const { data: existingConv } = await adminClient
         .from('ai_tutor_conversations')
-        .select('id, user_id')
+        .select('id, user_id, lesson_id')
         .eq('id', convId)
         .maybeSingle();
 
@@ -245,6 +258,9 @@ export async function POST(request: Request) {
           },
           { status: 403 }
         );
+      }
+      if (existingConv.lesson_id && !validatedLessonId) {
+        validatedLessonId = existingConv.lesson_id;
       }
     } else {
       // Create new conversation row
@@ -282,12 +298,14 @@ export async function POST(request: Request) {
 
     const orderedHistory = (pastMessages || []).reverse();
 
-    // 6. BUILD TUTOR CONTEXT, RESOLVE TARGET CONCEPT, & CONSTRUCT SYSTEM PROMPT
-    const context = await buildTutorContext({ userId: user.id, lessonId });
+    // 6. BUILD TUTOR CONTEXT, SELECT TEACHING PLAN, & CONSTRUCT SYSTEM PROMPT
+    const context = await buildTutorContext({ userId: user.id, lessonId: validatedLessonId });
     const target = resolvePrimaryTargetConcept(context);
-    console.log('[TUTOR] context built, target concept:', target.concept, 'memories:', context.tutorMemories.length);
+    const plan = selectTeachingStrategy(context, message, mode);
 
-    const systemInstruction = buildTutorSystemPrompt(context, message, mode);
+    console.log('[TUTOR] context built, target concept:', target.concept, 'strategy:', plan.strategy, 'reasons:', plan.rationaleCodes);
+
+    const systemInstruction = buildTutorSystemPrompt(context, message, mode, plan);
 
     // DETERMINISTIC SERVER-SIDE ANSWER EXTRACTION PROTECTION
     const isExtractionAttempt = context.hasActiveAssessment && isAnswerExtractionAttempt(message);
@@ -335,7 +353,7 @@ export async function POST(request: Request) {
 
     console.log('[TUTOR] conversation persisted successfully');
 
-    // 10. NON-BLOCKING BACKGROUND MEMORY EXTRACTION & PERSISTENCE
+    // 10. NON-BLOCKING BACKGROUND MEMORY EXTRACTION & PERSISTENCE (PROVENANCE LESSON ID PRESERVED)
     extractTutorMemoryCandidates({
       userMessage: message,
       assistantResponse: assistantResponseText,
@@ -346,7 +364,7 @@ export async function POST(request: Request) {
           persistTutorMemories({
             userId: user.id,
             conversationId: convId,
-            lessonId: lessonId || null,
+            lessonId: validatedLessonId,
             memories: candidates,
           });
         }
@@ -374,6 +392,10 @@ export async function POST(request: Request) {
           memoryCount: context.tutorMemories.length,
           memoryEnabled: true,
           tutorMemories: context.tutorMemories,
+          teachingStrategy: plan.strategy,
+          targetConcept: plan.targetConcept,
+          explanationDepth: plan.explanationDepth,
+          strategyReasons: plan.rationaleCodes,
         },
       },
     });

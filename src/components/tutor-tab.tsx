@@ -46,6 +46,10 @@ export interface LearnerContextSummary {
     occurrenceCount: number;
     resolvedAt?: string | null;
   }>;
+  teachingStrategy?: string;
+  targetConcept?: string;
+  explanationDepth?: string;
+  strategyReasons?: string[];
 }
 
 interface TutorTabProps {
@@ -300,6 +304,20 @@ export default function TutorTab({ lessonId, initialContext }: TutorTabProps) {
               </p>
             </div>
           </div>
+
+          {/* TEACHING STRATEGY MODE BADGE */}
+          {learnerContext.teachingStrategy && (
+            <div className="pt-1 border-t border-zinc-900 flex items-center justify-between text-[10px]">
+              <span className="font-mono text-amber-400 font-bold uppercase flex items-center gap-1">
+                <Zap className="w-3 h-3 text-amber-400" />
+                Teaching Mode:
+              </span>
+              <span className="font-mono px-2 py-0.5 rounded bg-amber-500/10 border border-amber-500/20 text-amber-300 font-semibold uppercase flex items-center gap-1">
+                {learnerContext.teachingStrategy.replace('_', ' ')}
+                {learnerContext.targetConcept ? ` • ${learnerContext.targetConcept}` : ''}
+              </span>
+            </div>
+          )}
 
           {/* LEARNING MEMORY SUMMARY AREA */}
           {learnerContext.tutorMemories && learnerContext.tutorMemories.length > 0 && (
