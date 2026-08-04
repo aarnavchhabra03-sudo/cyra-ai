@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { adminClient } from '@/lib/supabase/admin';
 import { getAIProvider } from '@/lib/ai/provider';
-import { buildTutorContext } from '@/lib/tutor/context';
+import { buildTutorContext, resolvePrimaryTargetConcept } from '@/lib/tutor/context';
 import { buildTutorSystemPrompt } from '@/lib/tutor/prompt';
 
 export async function GET(request: Request) {
@@ -81,9 +81,11 @@ export async function GET(request: Request) {
       messages = dbMessages || [];
     }
 
-    // Build tutor context
+    // Build tutor context & resolve target concept
     const context = await buildTutorContext({ userId: user.id, lessonId });
-    console.log('[TUTOR] context built, mastery concepts loaded:', context.weakConcepts.length + context.masteredConcepts.length);
+    const target = resolvePrimaryTargetConcept(context);
+
+    console.log('[TUTOR] context built, target concept:', target.concept, 'mastery:', target.masteryScore);
 
     return NextResponse.json({
       success: true,
@@ -93,12 +95,14 @@ export async function GET(request: Request) {
         context: {
           lessonTitle: context.lessonTitle || 'General Tutor',
           learningPathTitle: context.learningPathTitle,
+          primaryWeakConcept: target.concept,
+          primaryWeakConceptScore: target.masteryScore,
+          primaryTargetConcept: target.concept,
+          primaryTargetLevel: target.level,
           weakConcepts: context.weakConcepts,
           developingConcepts: context.developingConcepts,
           proficientConcepts: context.proficientConcepts,
           masteredConcepts: context.masteredConcepts,
-          primaryWeakConcept: context.weakConcepts[0]?.concept || null,
-          masteryScore: context.weakConcepts[0]?.masteryScore ?? null,
           hasActiveAssessment: context.hasActiveAssessment,
         },
       },
@@ -257,11 +261,12 @@ export async function POST(request: Request) {
 
     const orderedHistory = (pastMessages || []).reverse();
 
-    // 6. BUILD TUTOR CONTEXT & SYSTEM PROMPT
+    // 6. BUILD TUTOR CONTEXT, RESOLVE TARGET CONCEPT, & CONSTRUCT SYSTEM PROMPT
     const context = await buildTutorContext({ userId: user.id, lessonId });
-    console.log('[TUTOR] context built, weak concepts:', context.weakConcepts.length, 'recent mistakes:', context.recentMistakes.length);
+    const target = resolvePrimaryTargetConcept(context);
+    console.log('[TUTOR] context built, resolved target concept:', target.concept, 'mastery:', target.masteryScore, 'mode:', mode || 'default');
 
-    const systemInstruction = buildTutorSystemPrompt(context, message);
+    const systemInstruction = buildTutorSystemPrompt(context, message, mode);
 
     // 7. FORMAT CONVERSATION PROMPT FOR AI PROVIDER
     let fullPrompt = `Below is the recent dialogue history with the student:\n\n`;
@@ -270,7 +275,7 @@ export async function POST(request: Request) {
     }
 
     if (mode) {
-      fullPrompt += `[TEACHING MODE REQUESTED: ${mode}]\n`;
+      fullPrompt += `[TEACHING MODE: ${mode} ON TARGET CONCEPT: "${target.concept}"]\n`;
     }
 
     fullPrompt += `STUDENT: ${message}\n\nASSISTANT:`;
@@ -314,8 +319,10 @@ export async function POST(request: Request) {
         },
         context: {
           lessonTitle: context.lessonTitle || 'General Tutor',
-          primaryWeakConcept: context.weakConcepts[0]?.concept || null,
-          masteryScore: context.weakConcepts[0]?.masteryScore ?? null,
+          primaryWeakConcept: target.concept,
+          primaryWeakConceptScore: target.masteryScore,
+          primaryTargetConcept: target.concept,
+          primaryTargetLevel: target.level,
           hasActiveAssessment: context.hasActiveAssessment,
         },
       },

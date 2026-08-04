@@ -27,6 +27,9 @@ export interface ChatMessage {
 export interface LearnerContextSummary {
   lessonTitle: string;
   primaryWeakConcept?: string | null;
+  primaryWeakConceptScore?: number | null;
+  primaryTargetConcept?: string | null;
+  primaryTargetLevel?: string | null;
   masteryScore?: number | null;
   hasActiveAssessment?: boolean;
   weakConcepts?: Array<{ concept: string; masteryScore: number }>;
@@ -92,13 +95,13 @@ export default function TutorTab({ lessonId, initialContext }: TutorTabProps) {
             setMessages(formatted);
           } else {
             // Context-Aware Personalized Starter Welcome Message
-            const weak = result.data.context?.primaryWeakConcept;
-            const score = result.data.context?.masteryScore;
+            const targetConcept = result.data.context?.primaryTargetConcept || result.data.context?.primaryWeakConcept;
+            const score = result.data.context?.primaryWeakConceptScore ?? result.data.context?.masteryScore;
             const lTitle = result.data.context?.lessonTitle || 'this course';
 
             let welcomeText = `Hello! I am your **CYRA AI Tutor**. I'm here to help you study **${lTitle}**.`;
-            if (weak && score !== null && score !== undefined) {
-              welcomeText += `\n\nI noticed you currently have **${score}% mastery** in **${weak}**. Would you like me to explain this concept simply, offer an analogy, or review your weak areas?`;
+            if (targetConcept) {
+              welcomeText += `\n\nI noticed you currently have **${score ?? 0}% mastery** in **${targetConcept}**. Would you like me to explain this concept simply, offer an analogy, or review your weak areas?`;
             } else {
               welcomeText += `\n\nAsk me any question about the lesson, concepts, or practice problems to get started!`;
             }
@@ -134,10 +137,28 @@ export default function TutorTab({ lessonId, initialContext }: TutorTabProps) {
 
     setErrorMsg(null);
 
+    // Format User Message for Quick Actions using resolved primary target concept if available
+    let displayText = trimmed;
+    const activeTarget = learnerContext?.primaryTargetConcept || learnerContext?.primaryWeakConcept;
+
+    if (modeHint && activeTarget) {
+      if (modeHint === 'SIMPLIFY') {
+        displayText = `Explain "${activeTarget}" simply`;
+      } else if (modeHint === 'ANALOGY') {
+        displayText = `Give me an analogy for "${activeTarget}"`;
+      } else if (modeHint === 'REVIEW_WEAKNESS') {
+        displayText = `Review my weak concepts starting with "${activeTarget}"`;
+      } else if (modeHint === 'QUIZ_ME') {
+        displayText = `Quiz me on "${activeTarget}"`;
+      } else if (modeHint === 'SOCRATIC') {
+        displayText = `Provide Socratic guidance on "${activeTarget}"`;
+      }
+    }
+
     const userMsg: ChatMessage = {
       id: `m-usr-${Date.now()}`,
       sender: 'user',
-      content: trimmed,
+      content: displayText,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     };
 
@@ -152,7 +173,7 @@ export default function TutorTab({ lessonId, initialContext }: TutorTabProps) {
         body: JSON.stringify({
           lessonId,
           conversationId,
-          message: trimmed,
+          message: displayText,
           mode: modeHint,
         }),
       });
@@ -202,6 +223,9 @@ export default function TutorTab({ lessonId, initialContext }: TutorTabProps) {
     handleSendMessage(inputValue);
   };
 
+  const activeWeakConcept = learnerContext?.primaryTargetConcept || learnerContext?.primaryWeakConcept;
+  const activeWeakScore = learnerContext?.primaryWeakConceptScore ?? learnerContext?.masteryScore;
+
   return (
     <div className="flex flex-col h-[620px] rounded-2xl glass-panel border border-zinc-800/80 overflow-hidden shadow-xl relative">
       {/* 1. TUTOR HEADER BANNER */}
@@ -249,8 +273,8 @@ export default function TutorTab({ lessonId, initialContext }: TutorTabProps) {
             <div className="p-2 rounded bg-zinc-900/50 border border-zinc-850 space-y-0.5">
               <span className="text-[9px] font-mono text-amber-400 uppercase font-bold block">Needs Review:</span>
               <p className="text-zinc-200 font-medium">
-                {learnerContext.primaryWeakConcept 
-                  ? `${learnerContext.primaryWeakConcept} (${learnerContext.masteryScore}%)` 
+                {activeWeakConcept 
+                  ? `${activeWeakConcept} (${activeWeakScore ?? 0}%)` 
                   : 'No critical weak concepts'}
               </p>
             </div>

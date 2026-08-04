@@ -24,6 +24,12 @@ export interface PracticeHistoryItem {
   completedAt: string;
 }
 
+export interface PrimaryTargetConcept {
+  concept: string;
+  masteryScore: number;
+  level: 'weak' | 'developing' | 'proficient' | 'mastered' | 'lesson_concept';
+}
+
 export interface TutorContext {
   userId: string;
   learningPathTitle?: string;
@@ -42,6 +48,37 @@ export interface TutorContext {
   recentPractice: PracticeHistoryItem[];
   topRecommendations: string[];
   hasActiveAssessment: boolean;
+}
+
+/**
+ * Resolves the primary target concept for intelligent quick actions based on fallback hierarchy:
+ * 1. Weak Concept (< 40%) - lowest score first
+ * 2. Developing Concept (40-69%) - lowest score first
+ * 3. Proficient Concept (70-84%) - lowest score first
+ * 4. Mastered Concept (85-100%) - lowest score first
+ * 5. Key Lesson Concept or Lesson Title (if no mastery data exists yet)
+ */
+export function resolvePrimaryTargetConcept(context: TutorContext): PrimaryTargetConcept {
+  if (context.weakConcepts.length > 0) {
+    const sorted = [...context.weakConcepts].sort((a, b) => a.masteryScore - b.masteryScore);
+    return { concept: sorted[0].concept, masteryScore: sorted[0].masteryScore, level: 'weak' };
+  }
+  if (context.developingConcepts.length > 0) {
+    const sorted = [...context.developingConcepts].sort((a, b) => a.masteryScore - b.masteryScore);
+    return { concept: sorted[0].concept, masteryScore: sorted[0].masteryScore, level: 'developing' };
+  }
+  if (context.proficientConcepts.length > 0) {
+    const sorted = [...context.proficientConcepts].sort((a, b) => a.masteryScore - b.masteryScore);
+    return { concept: sorted[0].concept, masteryScore: sorted[0].masteryScore, level: 'proficient' };
+  }
+  if (context.masteredConcepts.length > 0) {
+    const sorted = [...context.masteredConcepts].sort((a, b) => a.masteryScore - b.masteryScore);
+    return { concept: sorted[0].concept, masteryScore: sorted[0].masteryScore, level: 'mastered' };
+  }
+
+  // Fallback if no concept mastery rows exist yet in user_concept_mastery
+  const fallbackConcept = context.keyConcepts?.[0] || context.lessonTitle || 'General Lesson Topic';
+  return { concept: fallbackConcept, masteryScore: 0, level: 'lesson_concept' };
 }
 
 /**
