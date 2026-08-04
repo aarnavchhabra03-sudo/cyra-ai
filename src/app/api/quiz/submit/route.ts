@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server';
 import { adminClient } from '@/lib/supabase/admin';
 import { gradeQuizSubmission, SubmittedAnswerItem } from '@/lib/quiz/grading';
 import { LearningInsights, updateUserConceptMastery } from '@/lib/quiz/mastery';
+import { closeUserActiveAssessments } from '@/lib/adaptive/assessment-lifecycle';
 
 export async function POST(request: Request) {
   // 1. Authenticate user session
@@ -296,9 +297,16 @@ export async function POST(request: Request) {
       console.error('[QUIZ SUBMIT] Mastery calculation error (attempt preserved):', masteryErr);
     }
 
+    // 11. CLOSE ANY ACTIVE ASSESSMENTS FOR USER
+    try {
+      await closeUserActiveAssessments(user.id, quizRecord.lesson_id);
+    } catch (closeErr) {
+      console.warn('[QUIZ SUBMIT] Error closing active assessments:', closeErr);
+    }
+
     console.log(`[QUIZ SUBMIT] SUCCESS: User ${user.id} scored ${summary.percentage}% (${summary.passed ? 'PASSED' : 'FAILED'}), XP: +${summary.xpAwarded}`);
 
-    // 11. RETURN SAFE FINALIZED RESULTS RESPONSE WITH LEARNING INSIGHTS
+    // 12. RETURN SAFE FINALIZED RESULTS RESPONSE WITH LEARNING INSIGHTS
     return NextResponse.json({
       success: true,
       data: {

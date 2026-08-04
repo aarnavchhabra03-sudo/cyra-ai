@@ -9,6 +9,7 @@ import {
 } from '@/lib/adaptive/knowledge-graph';
 import { generateAdaptiveLearningPlan } from '@/lib/adaptive/learning-plan';
 import { buildLearnerStateSnapshot, determineNextBestAction } from '@/lib/adaptive/orchestrator';
+import { checkAndCleanupActiveAssessment } from '@/lib/adaptive/assessment-lifecycle';
 
 export interface ConceptMasteryItem {
   concept: string;
@@ -318,16 +319,7 @@ export async function buildTutorContext({
 
     // 5. CHECK ACTIVE ASSESSMENT STATUS (RELIABLE ACTIVE PRACTICE SESSION DETECTION)
     try {
-      const { data: activePractice } = await adminClient
-        .from('adaptive_practice_sessions')
-        .select('id')
-        .eq('user_id', userId)
-        .eq('status', 'active')
-        .maybeSingle();
-
-      if (activePractice) {
-        context.hasActiveAssessment = true;
-      }
+      context.hasActiveAssessment = await checkAndCleanupActiveAssessment(userId);
     } catch (activeErr) {
       console.warn('[TUTOR CONTEXT] Error checking active assessment status:', activeErr);
     }

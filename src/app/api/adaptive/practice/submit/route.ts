@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server';
 import { adminClient } from '@/lib/supabase/admin';
 import { gradeQuizSubmission, SubmittedAnswerItem } from '@/lib/quiz/grading';
 import { updateUserConceptMastery } from '@/lib/quiz/mastery';
+import { closeUserActiveAssessments } from '@/lib/adaptive/assessment-lifecycle';
 
 export async function POST(request: Request) {
   console.log('[PRACTICE SUBMIT] request received');
@@ -243,6 +244,14 @@ export async function POST(request: Request) {
         completed_at: completedAtIso,
       })
       .eq('id', sessionId);
+
+    // Also close any remaining active sessions for user
+    try {
+      await closeUserActiveAssessments(user.id, sessionRecord.lesson_id);
+    } catch (cErr) {
+      console.warn('[PRACTICE SUBMIT] Error closing active assessments:', cErr);
+    }
+
     console.log('[PRACTICE SUBMIT] session completed');
 
     // 8. PERSIST PRACTICE ATTEMPT RECORD WITH GUARANTEED started_at <= completed_at

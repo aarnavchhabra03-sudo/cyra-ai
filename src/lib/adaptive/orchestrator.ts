@@ -9,6 +9,7 @@ import {
 import { generateAdaptiveLearningPlan } from './learning-plan';
 import { generateAdaptiveRecommendations, ConceptMasteryRecordInput } from './recommendations';
 import { getRelevantTutorMemories, TutorMemoryItem } from '@/lib/tutor/memory';
+import { checkAndCleanupActiveAssessment } from './assessment-lifecycle';
 
 export type NextBestActionType =
   | 'continue_lesson'
@@ -206,16 +207,7 @@ export async function buildLearnerStateSnapshot({
     }
 
     // 6. Check Active Assessment Status
-    const { data: activeSession } = await adminClient
-      .from('adaptive_practice_sessions')
-      .select('id')
-      .eq('user_id', userId)
-      .eq('status', 'active')
-      .maybeSingle();
-
-    if (activeSession) {
-      snapshot.hasActiveAssessment = true;
-    }
+    snapshot.hasActiveAssessment = await checkAndCleanupActiveAssessment(userId);
 
     // 7. Load Tutor Memories
     snapshot.tutorMemories = await getRelevantTutorMemories({

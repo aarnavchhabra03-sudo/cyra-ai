@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server';
 import { adminClient } from '@/lib/supabase/admin';
 import { getAIProvider } from '@/lib/ai/provider';
 import { getUserConceptRelationships, calculateConceptReadiness, normalizeGraphConcept } from '@/lib/adaptive/knowledge-graph';
+import { closeUserActiveAssessments } from '@/lib/adaptive/assessment-lifecycle';
 
 export async function POST(request: Request) {
   // 1. Authenticate user session
@@ -195,6 +196,13 @@ export async function POST(request: Request) {
 
     // Take top 5 questions from AI response
     const rawQuestions = aiResponse.data.questions.slice(0, 5);
+
+    // Close any previous active sessions for user before starting a new one
+    try {
+      await closeUserActiveAssessments(user.id);
+    } catch (cErr) {
+      console.warn('[PRACTICE GENERATE] Error closing previous active sessions:', cErr);
+    }
 
     // 7. PERSIST PRACTICE SESSION IN DATABASE
     const { data: sessionRecord, error: sessionErr } = await adminClient
