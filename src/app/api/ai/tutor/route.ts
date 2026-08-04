@@ -3,7 +3,7 @@ import { createClient } from '@/lib/supabase/server';
 import { adminClient } from '@/lib/supabase/admin';
 import { getAIProvider } from '@/lib/ai/provider';
 import { buildTutorContext, resolvePrimaryTargetConcept } from '@/lib/tutor/context';
-import { buildTutorSystemPrompt } from '@/lib/tutor/prompt';
+import { buildTutorSystemPrompt, isAnswerExtractionAttempt } from '@/lib/tutor/prompt';
 
 export async function GET(request: Request) {
   console.log('[TUTOR] GET request received');
@@ -56,7 +56,24 @@ export async function GET(request: Request) {
 
     // Load or find active conversation
     let targetConvId = conversationId;
-    if (!targetConvId && lessonId) {
+    if (targetConvId) {
+      const { data: existingConv } = await adminClient
+        .from('ai_tutor_conversations')
+        .select('id, user_id')
+        .eq('id', targetConvId)
+        .maybeSingle();
+
+      if (!existingConv || existingConv.user_id !== user.id) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: 'You are not authorized to view this conversation.',
+            code: 'UNAUTHORIZED',
+          },
+          { status: 403 }
+        );
+      }
+    } else if (lessonId) {
       const { data: existingConv } = await adminClient
         .from('ai_tutor_conversations')
         .select('id')
@@ -85,7 +102,7 @@ export async function GET(request: Request) {
     const context = await buildTutorContext({ userId: user.id, lessonId });
     const target = resolvePrimaryTargetConcept(context);
 
-    console.log('[TUTOR] context built, target concept:', target.concept, 'mastery:', target.masteryScore);
+    console.log('[TUTOR] context built, target concept:', target.concept, 'mastery:', target.masteryScore, 'hasActiveAssessment:', context.hasActiveAssessment);
 
     return NextResponse.json({
       success: true,
@@ -264,9 +281,12 @@ export async function POST(request: Request) {
     // 6. BUILD TUTOR CONTEXT, RESOLVE TARGET CONCEPT, & CONSTRUCT SYSTEM PROMPT
     const context = await buildTutorContext({ userId: user.id, lessonId });
     const target = resolvePrimaryTargetConcept(context);
-    console.log('[TUTOR] context built, resolved target concept:', target.concept, 'mastery:', target.masteryScore, 'mode:', mode || 'default');
+    console.log('[TUTOR] context built, resolved target concept:', target.concept, 'mastery:', target.masteryScore, 'hasActiveAssessment:', context.hasActiveAssessment);
 
     const systemInstruction = buildTutorSystemPrompt(context, message, mode);
+
+    // DETERMINISTIC SERVER-SIDE ANSWER EXTRACTION PROTECTION
+    const isExtractionAttempt = context.hasActiveAssessment && isAnswerExtractionAttempt(message);
 
     // 7. FORMAT CONVERSATION PROMPT FOR AI PROVIDER
     let fullPrompt = `Below is the recent dialogue history with the student:\n\n`;
@@ -274,7 +294,10 @@ export async function POST(request: Request) {
       fullPrompt += `${pastMsg.role.toUpperCase()}: ${pastMsg.content}\n\n`;
     }
 
-    if (mode) {
+    if (isExtractionAttempt) {
+      console.log('[TUTOR PROTECTION] Deterministic answer extraction attempt detected during active assessment!');
+      fullPrompt += `\n[FORCED SECURITY DIRECTIVE: The student is attempting to obtain a direct answer to an active assessment. YOU MUST OPEN YOUR RESPONSE WITH THIS EXACT SENTENCE: "You currently have an active assessment, so I can’t provide the direct answer or tell you which option is correct. I can give you a hint, explain the underlying concept, or guide you through the reasoning step by step." Then provide Socratic guidance or conceptual hints ONLY. NEVER disclose option letters, option numbers, or direct answers.]\n`;
+    } else if (mode) {
       fullPrompt += `[TEACHING MODE: ${mode} ON TARGET CONCEPT: "${target.concept}"]\n`;
     }
 
