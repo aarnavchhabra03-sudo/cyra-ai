@@ -4,6 +4,7 @@ import { adminClient } from '@/lib/supabase/admin';
 import { gradeQuizSubmission, SubmittedAnswerItem } from '@/lib/quiz/grading';
 import { LearningInsights, updateUserConceptMastery } from '@/lib/quiz/mastery';
 import { closeUserActiveAssessments } from '@/lib/adaptive/assessment-lifecycle';
+import { correlateAssessmentEvidence } from '@/lib/adaptive/intervention-tracking';
 
 export async function POST(request: Request) {
   // 1. Authenticate user session
@@ -295,6 +296,22 @@ export async function POST(request: Request) {
       );
     } catch (masteryErr) {
       console.error('[QUIZ SUBMIT] Mastery calculation error (attempt preserved):', masteryErr);
+    }
+
+    // Correlate intervention evidence for weak/strong concepts updated in this quiz
+    try {
+      const topWeak = learningInsights.weakConcepts[0];
+      const targetC = topWeak ? topWeak.concept : 'General Quiz Topic';
+      const newMastery = topWeak ? topWeak.score : 50;
+      await correlateAssessmentEvidence({
+        userId: user.id,
+        concept: targetC,
+        lessonId: quizRecord.lesson_id,
+        newMasteryScore: newMastery,
+        score: summary.percentage,
+      });
+    } catch (corrErr) {
+      console.warn('[QUIZ SUBMIT] Evidence correlation warning:', corrErr);
     }
 
     // 11. CLOSE ANY ACTIVE ASSESSMENTS FOR USER

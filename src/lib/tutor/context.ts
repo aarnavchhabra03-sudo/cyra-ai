@@ -10,6 +10,7 @@ import {
 import { generateAdaptiveLearningPlan } from '@/lib/adaptive/learning-plan';
 import { buildLearnerStateSnapshot, determineNextBestAction } from '@/lib/adaptive/orchestrator';
 import { checkAndCleanupActiveAssessment } from '@/lib/adaptive/assessment-lifecycle';
+import { getInterventionEffectiveness } from '@/lib/adaptive/intervention-tracking';
 
 export interface ConceptMasteryItem {
   concept: string;
@@ -87,6 +88,20 @@ export interface TutorContext {
     priorityScore: number;
     reasonCode: string;
     reason: string;
+  };
+  interventionIntelligence?: {
+    totalCompletedInterventions: number;
+    averageMasteryGain: number;
+    historicallyEffectiveStrategies: Array<{
+      strategy: string;
+      effectivenessScore: number;
+      sampleSize: number;
+    }>;
+    recentFailedInterventions: Array<{
+      concept: string;
+      intervention: string;
+      masteryDelta: number;
+    }>;
   };
 }
 
@@ -410,6 +425,29 @@ export async function buildTutorContext({
       };
     } catch (nbaErr) {
       console.warn('[TUTOR CONTEXT] Error calculating next best action context:', nbaErr);
+    }
+
+    // 10. BUILD CLOSED-LOOP INTERVENTION INTELLIGENCE SUMMARY
+    try {
+      const effReport = await getInterventionEffectiveness(userId);
+      context.interventionIntelligence = {
+        totalCompletedInterventions: effReport.totalCompletedInterventions,
+        averageMasteryGain: effReport.averageMasteryGain,
+        historicallyEffectiveStrategies: effReport.strategyBreakdown.map((s) => ({
+          strategy: s.strategy,
+          effectivenessScore: s.effectivenessScore,
+          sampleSize: s.sampleSize,
+        })),
+        recentFailedInterventions: effReport.recentOutcomes
+          .filter((r) => r.masteryDelta < 5)
+          .map((r) => ({
+            concept: r.concept,
+            intervention: r.interventionType,
+            masteryDelta: r.masteryDelta,
+          })),
+      };
+    } catch (iiErr) {
+      console.warn('[TUTOR CONTEXT] Error calculating intervention intelligence context:', iiErr);
     }
   } catch (err) {
     console.error('[TUTOR CONTEXT] Error building tutor context:', err);

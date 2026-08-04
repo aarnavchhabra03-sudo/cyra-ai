@@ -302,6 +302,26 @@ export function determineNextBestAction(snapshot: LearnerStateSnapshot): NextBes
     .sort((a, b) => a.masteryScore - b.masteryScore)[0];
 
   if (demonstratedWeakness) {
+    // Check for intervention stagnation on this concept
+    const recentStagnant = snapshot.recentPracticeAttempts.filter(
+      (pa) => normalizeGraphConcept(pa.concept) === normalizeGraphConcept(demonstratedWeakness.concept)
+    );
+
+    if (recentStagnant.length >= 2 && recentStagnant.every((pa) => pa.percentage < 50)) {
+      return {
+        action: 'ask_tutor',
+        concept: demonstratedWeakness.concept,
+        lessonId: demonstratedWeakness.lessonId || snapshot.currentLessonId || null,
+        priorityScore: 88,
+        reasonCode: 'INTERVENTION_STAGNATION',
+        reason: `CYRA recommends switching to a guided explanation because recent practice sessions on ${demonstratedWeakness.concept} have shown minimal mastery gain.`,
+        secondaryActions: [
+          { action: 'review_lesson', concept: demonstratedWeakness.concept, reason: `Review core study notes for ${demonstratedWeakness.concept}.` },
+          { action: 'revisit_notes', concept: demonstratedWeakness.concept, reason: `Revisit study guide.` },
+        ],
+      };
+    }
+
     return {
       action: 'practice_concept',
       concept: demonstratedWeakness.concept,

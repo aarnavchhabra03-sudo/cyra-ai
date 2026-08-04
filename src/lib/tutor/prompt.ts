@@ -112,6 +112,24 @@ If the student asks what to do now, advise them: "${nbaCtx.reason}"
 `;
   }
 
+  // Format intervention effectiveness context
+  const iiCtx = context.interventionIntelligence;
+  let iiSection = '';
+  if (iiCtx && iiCtx.totalCompletedInterventions > 0) {
+    const topStrat = iiCtx.historicallyEffectiveStrategies?.[0];
+    iiSection = `
+============================================================
+<INTERVENTION_EFFECTIVENESS_CONTEXT>
+Total Measured Interventions: ${iiCtx.totalCompletedInterventions} (Avg Mastery Gain: +${iiCtx.averageMasteryGain}%)
+${topStrat ? `Historically Most Effective Strategy: ${topStrat.strategy.toUpperCase()} (Score: ${topStrat.effectivenessScore}/100, Samples: ${topStrat.sampleSize})` : ''}
+
+PEDAGOGICAL ADAPTATION DIRECTIVE:
+CYRA Tutor will naturally adapt explanation depth and style using historically effective learning patterns for this learner.
+DO NOT mention database tables, algorithm scores, or internal diagnostic metrics to the student.
+</INTERVENTION_EFFECTIVENESS_CONTEXT>
+`;
+  }
+
   // Active Assessment Directives
   let activeAssessmentDirective = '';
   if (context.hasActiveAssessment) {
@@ -219,6 +237,7 @@ ${teachingPlanSection}
 ${kgSection}
 ${planCtxSection}
 ${nbaSection}
+${iiSection}
 ============================================================
 PRIMARY TARGET CONCEPT FOR QUICK ACTIONS
 ============================================================

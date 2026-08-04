@@ -4,6 +4,7 @@ import { adminClient } from '@/lib/supabase/admin';
 import { gradeQuizSubmission, SubmittedAnswerItem } from '@/lib/quiz/grading';
 import { updateUserConceptMastery } from '@/lib/quiz/mastery';
 import { closeUserActiveAssessments } from '@/lib/adaptive/assessment-lifecycle';
+import { correlateAssessmentEvidence } from '@/lib/adaptive/intervention-tracking';
 
 export async function POST(request: Request) {
   console.log('[PRACTICE SUBMIT] request received');
@@ -244,6 +245,19 @@ export async function POST(request: Request) {
         completed_at: completedAtIso,
       })
       .eq('id', sessionId);
+
+    // Correlate evidence for this practice session intervention
+    try {
+      await correlateAssessmentEvidence({
+        userId: user.id,
+        concept: sessionRecord.concept,
+        lessonId: sessionRecord.lesson_id,
+        newMasteryScore: masteryAfter,
+        score: summary.percentage,
+      });
+    } catch (cErr) {
+      console.warn('[PRACTICE SUBMIT] Evidence correlation warning:', cErr);
+    }
 
     // Also close any remaining active sessions for user
     try {

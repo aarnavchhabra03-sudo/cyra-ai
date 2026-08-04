@@ -72,6 +72,7 @@ export default function ProgressPage() {
   const [generatingConcept, setGeneratingConcept] = useState<string | null>(null);
   const [genError, setGenError] = useState<string | null>(null);
   const [rootGaps, setRootGaps] = useState<RootGapUI[]>([]);
+  const [effectivenessData, setEffectivenessData] = useState<any | null>(null);
 
   useEffect(() => {
     async function fetchData() {
@@ -111,15 +112,15 @@ export default function ProgressPage() {
         setLoadingRecs(false);
       }
 
-      // 3. Fetch knowledge graph intelligence from GET /api/adaptive/knowledge-graph
+      // 4. Fetch intervention effectiveness from GET /api/adaptive/intervention-effectiveness
       try {
-        const kgRes = await fetch('/api/adaptive/knowledge-graph');
-        const kgResult = await kgRes.json();
-        if (kgRes.ok && kgResult.success && kgResult.data) {
-          setRootGaps(kgResult.data.rootGaps || []);
+        const effRes = await fetch('/api/adaptive/intervention-effectiveness');
+        const effResult = await effRes.json();
+        if (effRes.ok && effResult.success && effResult.data) {
+          setEffectivenessData(effResult.data);
         }
-      } catch (kgErr) {
-        console.warn('[PROGRESS] Error fetching knowledge graph:', kgErr);
+      } catch (effErr) {
+        console.warn('[PROGRESS] Error fetching intervention effectiveness:', effErr);
       }
     }
 
@@ -188,6 +189,53 @@ export default function ProgressPage() {
           );
         })}
       </div>
+
+      {/* CYRA LEARNING IMPACT CARD (STAGE 12.9) */}
+      {effectivenessData && effectivenessData.totalCompletedInterventions > 0 && (
+        <div className="p-6 rounded-2xl glass-panel border border-emerald-500/30 bg-gradient-to-r from-emerald-950/20 via-cyan-950/10 to-zinc-950/40 space-y-4 shadow-xl">
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] font-mono font-extrabold text-emerald-400 uppercase tracking-widest flex items-center gap-1.5">
+              <Sparkles className="w-4 h-4 text-emerald-400" />
+              CYRA Learning Impact
+            </span>
+            <span className="text-[9px] font-mono text-zinc-400">
+              {effectivenessData.totalCompletedInterventions} Interventions Measured
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* Most Effective Strategy */}
+            {effectivenessData.mostEffectiveStrategy && (
+              <div className="p-4 rounded-xl bg-zinc-950/80 border border-zinc-800 space-y-1.5">
+                <span className="text-[9px] font-mono text-zinc-500 uppercase tracking-wider block">
+                  Most Effective Approach
+                </span>
+                <h4 className="text-sm font-bold text-white uppercase tracking-tight">
+                  {effectivenessData.mostEffectiveStrategy.strategy.replace('_', ' ')}
+                </h4>
+                <p className="text-xs text-emerald-400 font-semibold">
+                  Average mastery gain: +{effectivenessData.mostEffectiveStrategy.averageMasteryGain}%
+                </p>
+              </div>
+            )}
+
+            {/* Recent Intervention Result */}
+            {effectivenessData.recentOutcomes && effectivenessData.recentOutcomes.length > 0 && (
+              <div className="p-4 rounded-xl bg-zinc-950/80 border border-zinc-800 space-y-1.5">
+                <span className="text-[9px] font-mono text-zinc-500 uppercase tracking-wider block">
+                  Recent Impact
+                </span>
+                <h4 className="text-xs font-bold text-white truncate">
+                  {effectivenessData.recentOutcomes[0].concept}
+                </h4>
+                <p className="text-xs text-cyan-400 font-semibold">
+                  {effectivenessData.recentOutcomes[0].masteryBefore}% &rarr; {effectivenessData.recentOutcomes[0].masteryAfter}% (+{effectivenessData.recentOutcomes[0].masteryDelta}%)
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* STAGE 12.8A: ROOT KNOWLEDGE GAPS SECTION */}
       {rootGaps.length > 0 && (

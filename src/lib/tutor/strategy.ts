@@ -174,6 +174,23 @@ export function selectTeachingStrategy(
     }
   }
 
+  // 3B. CLOSED-LOOP HISTORICAL EFFECTIVENESS FEEDBACK
+  const effectiveStrat = context.interventionIntelligence?.historicallyEffectiveStrategies?.[0];
+  if (effectiveStrat && effectiveStrat.sampleSize >= 2 && effectiveStrat.effectivenessScore >= 75) {
+    if (effectiveStrat.strategy === 'step_by_step') {
+      strategy = 'step_by_step';
+      explanationDepth = 'basic';
+    } else if (effectiveStrat.strategy === 'analogy' || effectiveStrat.strategy === 'tutor_analogy') {
+      strategy = 'analogy';
+      useAnalogy = true;
+    } else if (effectiveStrat.strategy === 'tutor_socratic') {
+      strategy = 'guided_reasoning';
+    }
+    if (!rationaleCodes.includes('HISTORICALLY_EFFECTIVE_STRATEGY')) {
+      rationaleCodes.push('HISTORICALLY_EFFECTIVE_STRATEGY');
+    }
+  }
+
   // 3. EXPLICIT USER INTENT OVERRIDES (User Request > Memory > Defaults)
   const userMsgLower = userMessage.toLowerCase();
 

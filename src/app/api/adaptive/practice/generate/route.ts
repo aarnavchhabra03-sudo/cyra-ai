@@ -4,6 +4,7 @@ import { adminClient } from '@/lib/supabase/admin';
 import { getAIProvider } from '@/lib/ai/provider';
 import { getUserConceptRelationships, calculateConceptReadiness, normalizeGraphConcept } from '@/lib/adaptive/knowledge-graph';
 import { closeUserActiveAssessments } from '@/lib/adaptive/assessment-lifecycle';
+import { startLearningIntervention } from '@/lib/adaptive/intervention-tracking';
 
 export async function POST(request: Request) {
   // 1. Authenticate user session
@@ -218,15 +219,31 @@ export async function POST(request: Request) {
       .single();
 
     if (sessionErr || !sessionRecord) {
-      console.error('[PRACTICE GENERATE] Error inserting practice session:', sessionErr);
+      console.error('[PRACTICE GENERATE] Error creating practice session:', sessionErr);
       return NextResponse.json(
         {
           success: false,
-          error: 'Failed to create practice session in database.',
+          error: 'Failed to record practice session in database.',
           code: 'DB_SESSION_FAILED',
         },
         { status: 500 }
       );
+    }
+
+    // Track intervention event for closed-loop learning
+    try {
+      await startLearningIntervention({
+        userId: user.id,
+        learningPathId: parentPath.id,
+        lessonId: lessonId,
+        concept: targetConceptToPractice,
+        interventionType: redirectedToPrerequisite ? 'prerequisite_repair' : 'targeted_practice',
+        strategy: redirectedToPrerequisite ? 'prerequisite_repair' : 'targeted_practice',
+        triggerReason: redirectedToPrerequisite ? 'BLOCKING_PREREQUISITE' : 'DEMONSTRATED_WEAKNESS',
+        masteryBefore,
+      });
+    } catch (intErr) {
+      console.warn('[PRACTICE GENERATE] Error starting intervention tracking:', intErr);
     }
 
     // 8. PERSIST PRACTICE QUESTIONS IN BATCH
