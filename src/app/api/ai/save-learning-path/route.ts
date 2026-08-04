@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
+import { generateLearningPathKnowledgeGraph } from '@/lib/adaptive/graph-generation';
 import { LearningPathGeneration } from '@/types/ai';
 
 export async function POST(request: Request) {
@@ -218,7 +219,15 @@ export async function POST(request: Request) {
       console.log(`[save-learning-path] Successfully inserted ${insertedLessons.length} lessons.`);
     }
 
-    // 6. Complete Success Verification
+    // 6. Non-blocking trigger for dynamic knowledge graph generation
+    generateLearningPathKnowledgeGraph({
+      learningPathId,
+      userId: user.id,
+    }).catch((kgErr) => {
+      console.warn('[save-learning-path] Background graph generation warning (non-critical):', kgErr);
+    });
+
+    // 7. Complete Success Verification
     console.log(`[save-learning-path] SUCCESS: Entire curriculum persisted (1 path, ${insertedModules.length} modules, ${lessonsToInsert.length} lessons).`);
     return NextResponse.json({
       success: true,

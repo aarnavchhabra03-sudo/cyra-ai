@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { 
@@ -12,7 +12,8 @@ import {
   ChevronRight, 
   ArrowRight,
   Sparkles,
-  BookOpen
+  BookOpen,
+  Zap
 } from 'lucide-react';
 import { Module, RoadmapNode } from '@/data/mockData';
 
@@ -36,6 +37,24 @@ export default function RoadmapTab({
   const [selectedModuleId, setSelectedModuleId] = useState<string | null>(null);
   const [selectedModuleIdx, setSelectedModuleIdx] = useState<number>(0);
   const [selectedNodeIdx, setSelectedNodeIdx] = useState<number>(0);
+  const [learningPlanTargets, setLearningPlanTargets] = useState<any[]>([]);
+
+  useEffect(() => {
+    async function loadLearningPlan() {
+      try {
+        const query = learningPathId ? `?learningPathId=${encodeURIComponent(learningPathId)}` : '';
+        const res = await fetch(`/api/adaptive/learning-plan${query}`);
+        const result = await res.json();
+        if (res.ok && result.success && result.data?.nextTargets) {
+          setLearningPlanTargets(result.data.nextTargets);
+        }
+      } catch (err) {
+        console.warn('[ROADMAP TAB] Error loading learning plan:', err);
+      }
+    }
+
+    loadLearningPlan();
+  }, [learningPathId]);
 
   const handleNodeClick = (node: RoadmapNode, moduleId: string, modIdx: number, nodeIdx: number) => {
     setSelectedNode(node);
@@ -48,204 +67,188 @@ export default function RoadmapTab({
   const handleStartLearning = () => {
     if (!selectedNode) return;
 
-    if (onOpenLesson) {
-      onOpenLesson(selectedNode.id);
-    } else if (learningPathId) {
-      router.push(`/learn/${learningPathId}/lesson/${selectedNode.id}`);
+    const dbLessonId = (selectedNode as any).dbLessonId;
+    if (onOpenLesson && dbLessonId) {
+      onOpenLesson(dbLessonId);
     } else {
-      onSelectNode(selectedNode.id, selectedNode.title);
       onSwitchTab('notes');
     }
   };
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start h-full">
-      {/* Visual Roadmap Flow Tree (8 Cols) */}
-      <div className="lg:col-span-8 space-y-8 pr-2">
-        {modules.map((mod, modIdx) => (
-          <div key={mod.id} className="space-y-4">
-            {/* Module Header */}
-            <div className="flex items-center gap-3">
-              <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-mono font-bold border ${
-                mod.status === 'completed' 
-                  ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' 
-                  : mod.status === 'in_progress'
-                  ? 'bg-indigo-500/10 border-indigo-500/20 text-indigo-400 animate-pulse'
-                  : 'bg-zinc-900 border-zinc-800 text-zinc-600'
-              }`}>
-                {modIdx + 1}
-              </div>
-              <div>
-                <h4 className="text-sm font-bold text-zinc-200">{mod.title}</h4>
-                <p className="text-[11px] text-zinc-500 mt-0.5">{mod.description}</p>
-              </div>
+    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 max-w-6xl mx-auto">
+      {/* LEFT / CENTER: Interactive Roadmap Modules */}
+      <div className="lg:col-span-2 space-y-6">
+        {/* CYRA RECOMMENDS NEXT HEADER CARD */}
+        {learningPlanTargets.length > 0 && (
+          <div className="p-4 rounded-xl glass-panel border border-cyan-900/40 bg-cyan-950/20 space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] font-mono font-bold text-cyan-400 uppercase flex items-center gap-1.5">
+                <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
+                CYRA Recommends Next
+              </span>
+              <span className="text-[9px] font-mono text-zinc-400">
+                Adaptive Intelligence Overlay
+              </span>
             </div>
 
-            {/* Nodes Container with Connecting Line */}
-            <div className="relative pl-4 space-y-4">
-              {/* Vertical connecting line */}
-              <div className="absolute left-4 top-2 bottom-6 w-0.5 bg-gradient-to-b from-indigo-500/30 to-zinc-800" />
-
-              {mod.nodes.map((node, nodeIdx) => {
-                const isSelected = selectedNode?.id === node.id;
-                return (
-                  <div 
-                    key={node.id} 
-                    onClick={() => handleNodeClick(node, mod.id, modIdx, nodeIdx)}
-                    className={`ml-4 p-4 rounded-xl border transition-all duration-200 cursor-pointer relative group ${
-                      isSelected
-                        ? 'bg-indigo-600/15 border-indigo-500 ring-1 ring-indigo-500/30 shadow-[0_0_20px_rgba(99,102,241,0.2)]'
-                        : 'bg-zinc-900/30 border-zinc-800/80 hover:bg-zinc-800/20 hover:border-indigo-500/40'
-                    }`}
-                  >
-                    {/* Active Node Indicator Left Dot */}
-                    <div className="absolute -left-[20px] top-[22px] w-2.5 h-2.5 rounded-full border border-background z-10 flex items-center justify-center">
-                      <div className={`w-full h-full rounded-full ${
-                        node.status === 'completed' 
-                          ? 'bg-emerald-500' 
-                          : node.status === 'in_progress'
-                          ? 'bg-indigo-500 animate-ping'
-                          : 'bg-zinc-700'
-                      }`} />
-                    </div>
-
-                    <div className="flex justify-between items-start gap-4">
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-2">
-                          <span className="text-[9px] font-mono text-zinc-500">
-                            {modIdx + 1}.{nodeIdx + 1}
-                          </span>
-                          <h5 className={`text-xs font-bold ${
-                            node.status === 'locked' ? 'text-zinc-500' : 'text-zinc-200 group-hover:text-white'
-                          }`}>
-                            {node.title}
-                          </h5>
-                          
-                          {/* Mini status pill */}
-                          {node.status === 'in_progress' && (
-                            <span className="text-[8px] font-mono font-bold bg-indigo-500/20 text-indigo-300 px-1 rounded-md border border-indigo-500/30">
-                              IN PROGRESS
-                            </span>
-                          )}
-                        </div>
-                        <p className="text-[10px] text-zinc-400 line-clamp-1 group-hover:line-clamp-none transition-all duration-200">
-                          {node.description}
-                        </p>
-                      </div>
-
-                      {/* Right Icons & Action */}
-                      <div className="flex-shrink-0 flex items-center gap-2.5 text-zinc-500">
-                        <div className="flex items-center gap-1 text-[9px] font-mono">
-                          <Clock className="w-3 h-3" />
-                          <span>{node.estimatedMinutes}m</span>
-                        </div>
-
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleNodeClick(node, mod.id, modIdx, nodeIdx);
-                          }}
-                          className={`px-2.5 py-1 rounded-lg border text-[10px] font-semibold flex items-center gap-1 transition-all ${
-                            isSelected
-                              ? 'bg-indigo-600 text-white border-indigo-400 shadow-sm shadow-indigo-500/30'
-                              : 'bg-indigo-600/20 hover:bg-indigo-600 text-indigo-300 hover:text-white border-indigo-500/30'
-                          }`}
-                        >
-                          <span>{isSelected ? 'Selected' : 'Open'}</span>
-                          <ArrowRight className="w-3 h-3" />
-                        </button>
-                      </div>
-                    </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+              {learningPlanTargets.slice(0, 3).map((target, idx) => (
+                <div key={idx} className="p-3 rounded-lg bg-zinc-950/80 border border-zinc-800 space-y-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[9px] font-mono font-bold text-indigo-400 uppercase">
+                      Rank {target.rank}
+                    </span>
+                    <span className="text-[9px] font-mono text-zinc-400">
+                      {target.masteryScore}% mastery
+                    </span>
                   </div>
-                );
-              })}
-            </div>
-          </div>
-        ))}
-      </div>
-
-      {/* Selected Lesson Inspection Side-Panel (4 Cols) */}
-      <div className="lg:col-span-4 lg:sticky lg:top-8 space-y-4">
-        {selectedNode ? (
-          <div className="p-5 rounded-2xl glass-panel border border-zinc-800/80 space-y-5 shadow-xl animate-fade-in">
-            {/* Header info */}
-            <div>
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-[9px] font-mono font-bold uppercase tracking-wider text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded-md border border-indigo-500/20">
-                  LESSON {selectedModuleIdx + 1}.{selectedNodeIdx + 1}
-                </span>
-
-                <div className="flex items-center gap-2">
-                  <span className={`text-[8px] font-mono font-bold px-2 py-0.5 rounded-full border ${
-                    selectedNode.status === 'completed'
-                      ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
-                      : selectedNode.status === 'in_progress'
-                      ? 'bg-indigo-500/10 text-indigo-400 border-indigo-500/20'
-                      : 'bg-zinc-900 text-zinc-500 border-zinc-800'
-                  }`}>
-                    {selectedNode.status.toUpperCase()}
-                  </span>
-                  
-                  <div className="flex items-center gap-1 text-[10px] font-mono text-zinc-400">
-                    <Clock className="w-3 h-3" />
-                    <span>{selectedNode.estimatedMinutes} Mins</span>
-                  </div>
+                  <h5 className="text-xs font-bold text-white truncate">{target.concept}</h5>
+                  <p className="text-[10px] text-zinc-400 leading-snug line-clamp-2">{target.reason}</p>
                 </div>
-              </div>
-
-              <h4 className="text-sm font-bold text-white leading-snug">{selectedNode.title}</h4>
-            </div>
-
-            {/* Overview / Description */}
-            {selectedNode.description && (
-              <div className="space-y-1">
-                <span className="text-[9px] font-mono font-bold text-zinc-500 uppercase tracking-wider block">
-                  Overview
-                </span>
-                <p className="text-[11px] text-zinc-400 leading-relaxed bg-zinc-950/50 p-3 rounded-xl border border-zinc-900">
-                  {selectedNode.description}
-                </p>
-              </div>
-            )}
-
-            {/* Lesson Content Preview */}
-            {selectedNode.topics && selectedNode.topics.length > 0 && (
-              <div className="space-y-2">
-                <span className="text-[9px] font-mono font-bold text-zinc-500 uppercase tracking-wider block">
-                  Lesson Content Preview
-                </span>
-                <div className="space-y-1.5">
-                  {selectedNode.topics.map((topic, index) => (
-                    <div key={index} className="flex items-center gap-2 text-[10px] text-zinc-300 bg-zinc-900/60 p-2.5 rounded-lg border border-zinc-900">
-                      <div className="w-1.5 h-1.5 rounded-full bg-cyan-400 flex-shrink-0" />
-                      <span className="font-medium truncate">{topic}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Start Lesson CTA button */}
-            <button
-              onClick={handleStartLearning}
-              className="w-full py-2.5 px-4 rounded-xl bg-gradient-to-r from-indigo-500 via-purple-500 to-cyan-500 hover:opacity-90 text-white font-bold text-xs flex items-center justify-center gap-2 transition-all duration-200 shadow-md shadow-indigo-500/20"
-            >
-              <BookOpen className="w-3.5 h-3.5" />
-              <span>Start Lesson</span>
-              <ArrowRight className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        ) : (
-          <div className="p-6 rounded-2xl glass-panel border border-zinc-900/80 text-center space-y-3 py-12">
-            <div className="w-10 h-10 rounded-full bg-zinc-900 border border-zinc-800 flex items-center justify-center mx-auto text-zinc-500">
-              <Compass className="w-5 h-5" />
-            </div>
-            <div>
-              <h4 className="text-xs font-bold text-zinc-300">Select a Roadmap Node</h4>
-              <p className="text-[10px] text-zinc-500 mt-1">Select any learning topic from the roadmap tree to inspect lesson overview, duration, and start learning.</p>
+              ))}
             </div>
           </div>
         )}
+
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-xs font-mono text-zinc-400 uppercase tracking-wider font-semibold">
+              Curriculum Roadmap ({modules.length} Modules)
+            </h3>
+            <span className="text-[10px] font-mono text-zinc-500">Select a node to inspect</span>
+          </div>
+
+          {modules.map((module, modIdx) => (
+            <div 
+              key={module.id} 
+              className="p-5 rounded-2xl glass-panel border border-zinc-850 space-y-4 shadow-lg"
+            >
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="text-[9px] font-mono text-indigo-400 font-bold uppercase tracking-wider">
+                    Module {modIdx + 1}
+                  </span>
+                  <h4 className="text-sm font-bold text-white mt-0.5">{module.title}</h4>
+                </div>
+                <span className="text-[10px] font-mono text-zinc-500">
+                  {module.nodes.filter(n => n.status === 'completed').length} / {module.nodes.length} Completed
+                </span>
+              </div>
+
+              {/* Lesson Nodes Sequence */}
+              <div className="space-y-2 pt-1">
+                {module.nodes.map((node, nodeIdx) => {
+                  const isSelected = selectedNode?.id === node.id;
+                  const isCompleted = node.status === 'completed';
+                  const isCurrent = node.status === 'in_progress';
+
+                  let statusIcon = <Circle className="w-4 h-4 text-zinc-600" />;
+                  let badgeColor = 'border-zinc-800 text-zinc-400 bg-zinc-900/50';
+
+                  if (isCompleted) {
+                    statusIcon = <CheckCircle2 className="w-4 h-4 text-emerald-400" />;
+                    badgeColor = 'border-emerald-500/30 text-emerald-300 bg-emerald-950/30';
+                  } else if (isCurrent) {
+                    statusIcon = <Compass className="w-4 h-4 text-cyan-400 animate-spin-slow" />;
+                    badgeColor = 'border-cyan-500/30 text-cyan-300 bg-cyan-950/30';
+                  }
+
+                  return (
+                    <button
+                      key={node.id}
+                      onClick={() => handleNodeClick(node, module.id, modIdx, nodeIdx)}
+                      className={`w-full p-3.5 rounded-xl border text-left transition-all flex items-center justify-between gap-3 ${
+                        isSelected 
+                          ? 'border-indigo-500/80 bg-indigo-950/40 shadow-md ring-1 ring-indigo-500/30' 
+                          : 'border-zinc-900 bg-zinc-950/50 hover:bg-zinc-900/70 hover:border-zinc-800'
+                      }`}
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        {statusIcon}
+                        <div className="min-w-0">
+                          <span className="text-xs font-semibold text-white block truncate">{node.title}</span>
+                          <span className="text-[10px] font-mono text-zinc-500 block truncate">{node.description}</span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        {(node as any).duration && (
+                          <span className="text-[9px] font-mono text-zinc-500 flex items-center gap-1 hidden sm:inline-flex">
+                            <Clock className="w-3 h-3" />
+                            {(node as any).duration}
+                          </span>
+                        )}
+                        <ChevronRight className={`w-4 h-4 transition-transform ${isSelected ? 'text-indigo-400 translate-x-0.5' : 'text-zinc-600'}`} />
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* RIGHT: Node Detail Inspection Panel */}
+      <div className="lg:col-span-1">
+        <div className="sticky top-6 p-6 rounded-2xl glass-panel border border-zinc-850 space-y-5 shadow-xl">
+          {selectedNode ? (
+            <>
+              <div className="flex items-center justify-between border-b border-zinc-900 pb-3">
+                <span className="text-[10px] font-mono text-indigo-400 font-bold uppercase tracking-wider">
+                  Module {selectedModuleIdx + 1} • Lesson {selectedNodeIdx + 1}
+                </span>
+                <span className={`text-[9px] font-mono font-bold uppercase px-2 py-0.5 rounded border ${
+                  selectedNode.status === 'completed' 
+                    ? 'border-emerald-500/30 text-emerald-400 bg-emerald-950/30' 
+                    : 'border-cyan-500/30 text-cyan-400 bg-cyan-950/30'
+                }`}>
+                  {selectedNode.status}
+                </span>
+              </div>
+
+              <div>
+                <h4 className="text-base font-bold text-white tracking-tight">{selectedNode.title}</h4>
+                <p className="text-xs text-zinc-400 mt-2 leading-relaxed">{selectedNode.description}</p>
+              </div>
+
+              {(selectedNode as any).duration && (
+                <div className="flex items-center gap-2 text-xs font-mono text-zinc-400 bg-zinc-950/50 p-2.5 rounded-xl border border-zinc-900">
+                  <Clock className="w-4 h-4 text-cyan-400" />
+                  <span>Estimated Duration: {(selectedNode as any).duration}</span>
+                </div>
+              )}
+
+              <div className="pt-3 border-t border-zinc-900 space-y-2">
+                <button
+                  onClick={handleStartLearning}
+                  className="w-full py-2.5 px-4 rounded-xl bg-gradient-to-r from-indigo-500 to-cyan-500 hover:from-indigo-600 hover:to-cyan-600 text-white font-bold text-xs transition-all shadow-md flex items-center justify-center gap-2"
+                >
+                  <BookOpen className="w-4 h-4" />
+                  <span>Open Lesson & Study Notes</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </button>
+
+                <button
+                  onClick={() => onSwitchTab('quiz')}
+                  className="w-full py-2.5 px-4 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-300 hover:text-white font-semibold text-xs transition-colors flex items-center justify-center gap-2"
+                >
+                  <Zap className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>Take Quiz on This Topic</span>
+                </button>
+              </div>
+            </>
+          ) : (
+            <div className="py-12 text-center space-y-3">
+              <Compass className="w-8 h-8 text-zinc-600 mx-auto animate-spin-slow" />
+              <p className="text-xs font-semibold text-zinc-300">Select a Lesson Node</p>
+              <p className="text-[11px] text-zinc-500 max-w-xs mx-auto">
+                Click any lesson node in the roadmap sequence to inspect its description, study notes, and quiz actions.
+              </p>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

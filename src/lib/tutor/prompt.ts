@@ -74,6 +74,26 @@ ${kg.blocked ? `* PREREQUISITE WARNING: The student is blocked on "${target.conc
 `;
   }
 
+  // Format adaptive learning plan context
+  const planCtx = context.adaptiveLearningPlan;
+  let planCtxSection = '';
+  if (planCtx?.recommendedNextTarget) {
+    const rec = planCtx.recommendedNextTarget;
+    planCtxSection = `
+============================================================
+<ADAPTIVE_LEARNING_PLAN_CONTEXT>
+Top Recommended Next Target: "${rec.concept}" (Mastery: ${rec.masteryScore}%)
+Recommendation Reason: ${rec.reason}
+Suggested Action: ${rec.action.toUpperCase()}
+${planCtx.rootGap ? `Current Root Knowledge Gap: "${planCtx.rootGap.concept}" (Impact Score: ${planCtx.rootGap.rootGapScore})` : ''}
+${planCtx.blockedConcept ? `Blocked Downstream Concept: "${planCtx.blockedConcept.concept}" (Blocked by: ${planCtx.blockedConcept.blockingPrerequisite})` : ''}
+
+DIRECTIVE FOR "WHAT SHOULD I STUDY NEXT?" QUESTIONS:
+If the student asks what to study, practice, or focus on next, recommend "${rec.concept}" (${rec.masteryScore}% mastery) and explain that: "${rec.reason}"
+</ADAPTIVE_LEARNING_PLAN_CONTEXT>
+`;
+  }
+
   // Active Assessment Directives
   let activeAssessmentDirective = '';
   if (context.hasActiveAssessment) {
@@ -179,6 +199,7 @@ SAFETY & ANTI-PROMPT-INJECTION DIRECTIVES (CRITICAL)
 ${activeAssessmentDirective}
 ${teachingPlanSection}
 ${kgSection}
+${planCtxSection}
 ============================================================
 PRIMARY TARGET CONCEPT FOR QUICK ACTIONS
 ============================================================

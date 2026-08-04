@@ -7,6 +7,7 @@ import {
   detectRootKnowledgeGaps,
   normalizeGraphConcept,
 } from '@/lib/adaptive/knowledge-graph';
+import { generateAdaptiveLearningPlan } from '@/lib/adaptive/learning-plan';
 
 export interface ConceptMasteryItem {
   concept: string;
@@ -61,6 +62,22 @@ export interface TutorContext {
     blocked: boolean;
     blockingPrerequisites: Array<{ concept: string; masteryScore: number; strength: number }>;
     rootGaps: Array<{ concept: string; rootGapScore: number; blockingCount: number }>;
+  };
+  adaptiveLearningPlan?: {
+    recommendedNextTarget?: {
+      concept: string;
+      masteryScore: number;
+      reason: string;
+      action: string;
+    };
+    rootGap?: {
+      concept: string;
+      rootGapScore: number;
+    };
+    blockedConcept?: {
+      concept: string;
+      blockingPrerequisite: string;
+    };
   };
 }
 
@@ -353,6 +370,31 @@ export async function buildTutorContext({
       };
     } catch (kgErr) {
       console.warn('[TUTOR CONTEXT] Error calculating knowledge graph intelligence:', kgErr);
+    }
+
+    // 8. BUILD ADAPTIVE LEARNING PLAN SUMMARY
+    try {
+      const plan = await generateAdaptiveLearningPlan({ userId });
+      if (plan.nextTargets.length > 0) {
+        const topTarget = plan.nextTargets[0];
+        const topRootGap = plan.rootGaps[0];
+        const topBlocked = plan.blockedConcepts[0];
+
+        context.adaptiveLearningPlan = {
+          recommendedNextTarget: {
+            concept: topTarget.concept,
+            masteryScore: topTarget.masteryScore,
+            reason: topTarget.reason,
+            action: topTarget.action,
+          },
+          rootGap: topRootGap ? { concept: topRootGap.concept, rootGapScore: topRootGap.rootGapScore } : undefined,
+          blockedConcept: topBlocked && topBlocked.blockingPrerequisites?.[0]
+            ? { concept: topBlocked.concept, blockingPrerequisite: topBlocked.blockingPrerequisites[0].concept }
+            : undefined,
+        };
+      }
+    } catch (planErr) {
+      console.warn('[TUTOR CONTEXT] Error calculating adaptive learning plan context:', planErr);
     }
   } catch (err) {
     console.error('[TUTOR CONTEXT] Error building tutor context:', err);
