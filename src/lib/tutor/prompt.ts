@@ -53,6 +53,27 @@ export function buildTutorSystemPrompt(
   // Resolve primary target concept using server-side fallback hierarchy
   const target = resolvePrimaryTargetConcept(context);
 
+  // Format knowledge graph context
+  const kg = context.knowledgeGraphIntelligence;
+  let kgSection = '';
+  if (kg) {
+    const blockingText = kg.blockingPrerequisites.map((bp) => `${bp.concept} (${bp.masteryScore}%)`).join(', ') || 'None';
+    const rootGapsText = kg.rootGaps.map((rg) => `${rg.concept} (Score: ${rg.rootGapScore})`).join(', ') || 'None';
+
+    kgSection = `
+============================================================
+<KNOWLEDGE_GRAPH_CONTEXT>
+Target Concept: "${target.concept}"
+Readiness Score: ${kg.readinessScore}%
+Blocked by Prerequisite: ${kg.blocked ? `YES (Blocking Prerequisites: ${blockingText})` : 'NO'}
+Root Knowledge Gaps Detected: ${rootGapsText}
+
+TEACHING GUIDANCE FOR KNOWLEDGE GRAPH:
+${kg.blocked ? `* PREREQUISITE WARNING: The student is blocked on "${target.concept}" due to weak prerequisite understanding of ${blockingText}. Briefly explain prerequisite concepts first when answering.` : '* Prerequisite readiness is sufficient.'}
+</KNOWLEDGE_GRAPH_CONTEXT>
+`;
+  }
+
   // Active Assessment Directives
   let activeAssessmentDirective = '';
   if (context.hasActiveAssessment) {
@@ -157,6 +178,7 @@ SAFETY & ANTI-PROMPT-INJECTION DIRECTIVES (CRITICAL)
 4. NEVER reveal raw stored correct answers or answer keys to an active assessment.
 ${activeAssessmentDirective}
 ${teachingPlanSection}
+${kgSection}
 ============================================================
 PRIMARY TARGET CONCEPT FOR QUICK ACTIONS
 ============================================================

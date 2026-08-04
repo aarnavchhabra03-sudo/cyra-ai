@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { adminClient } from '@/lib/supabase/admin';
 import { generateAdaptiveRecommendations, ConceptMasteryRecordInput } from '@/lib/adaptive/recommendations';
+import { getUserConceptRelationships } from '@/lib/adaptive/knowledge-graph';
 
 export async function GET() {
   try {
@@ -140,13 +141,7 @@ export async function GET() {
 
           for (const concept of conceptsList) {
             const candidates = conceptCandidatesMap.get(concept) || [];
-            console.log(`[ADAPTIVE] resolving concept: "${concept}"`);
-            console.log(`[ADAPTIVE] matching question rows: ${candidates.length}`);
-
             if (candidates.length > 0) {
-              // Sort candidates:
-              // 1. User's most recent quiz attempt first
-              // 2. Most recently created quiz second
               candidates.sort((a, b) => {
                 if (a.attemptRecency !== b.attemptRecency) {
                   return b.attemptRecency - a.attemptRecency;
@@ -156,16 +151,8 @@ export async function GET() {
                 return timeB - timeA;
               });
 
-              const candidateQuizIds = candidates.map(c => c.quizId);
               const bestLessonId = candidates[0].lessonId;
-
-              console.log(`[ADAPTIVE] candidate quizzes:`, candidateQuizIds);
-              console.log(`[ADAPTIVE] resolved lesson: ${bestLessonId}`);
-
               resolvedMap.set(concept, bestLessonId);
-            } else {
-              console.log(`[ADAPTIVE] candidate quizzes: []`);
-              console.log(`[ADAPTIVE] resolved lesson: null`);
             }
           }
 
@@ -178,8 +165,9 @@ export async function GET() {
       }
     }
 
-    // 4. Run deterministic recommendation engine
-    const result = generateAdaptiveRecommendations(records, 5);
+    // 4. Load concept relationships & run deterministic recommendation engine with knowledge graph
+    const relationships = await getUserConceptRelationships(user.id);
+    const result = generateAdaptiveRecommendations(records, 5, relationships);
 
     return NextResponse.json({
       success: true,

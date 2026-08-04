@@ -1,4 +1,5 @@
 import { MasteryLevel, getMasteryLevel } from '@/lib/quiz/mastery';
+import { ConceptRelationship, calculateConceptReadiness, normalizeGraphConcept } from '@/lib/adaptive/knowledge-graph';
 
 export type RecommendationPriority = 'critical' | 'high' | 'medium' | 'low';
 export type RecommendationType = 'review' | 'reinforce' | 'practice';
@@ -32,6 +33,9 @@ export interface AdaptiveRecommendation {
   attemptCount: number;
   lastPracticedAt: string;
   lessonId?: string | null;
+  readinessScore?: number;
+  blocked?: boolean;
+  blockingPrerequisites?: Array<{ concept: string; masteryScore: number }>;
 }
 
 export interface AdaptiveSummary {
@@ -48,17 +52,24 @@ export interface AdaptiveRecommendationsResult {
 }
 
 /**
- * Deterministic Adaptive Recommendation Engine.
- * Analyzes student concept mastery records and calculates prioritized learning recommendations.
+ * Deterministic Adaptive Recommendation Engine with Knowledge Graph Integration.
+ * Analyzes student concept mastery records and knowledge graph relationships to calculate prioritized learning recommendations.
  */
 export function generateAdaptiveRecommendations(
   records: ConceptMasteryRecordInput[],
-  limit: number = 5
+  limit: number = 5,
+  relationships: ConceptRelationship[] = []
 ): AdaptiveRecommendationsResult {
   let weakCount = 0;
   let developingCount = 0;
   let proficientCount = 0;
   let masteredCount = 0;
+
+  // Build mastery map for readiness calculations
+  const masteryMap = new Map<string, number>();
+  for (const r of records) {
+    masteryMap.set(normalizeGraphConcept(r.concept), r.mastery_score);
+  }
 
   const candidates: AdaptiveRecommendation[] = [];
 
@@ -85,28 +96,39 @@ export function generateAdaptiveRecommendations(
       continue;
     }
 
+    // Calculate concept readiness & blocked status using knowledge graph
+    const readiness = calculateConceptReadiness({
+      targetConcept: record.concept,
+      masteryMap,
+      relationships,
+    });
+
     let priority: RecommendationPriority;
     let recommendationType: RecommendationType;
     let title: string;
     let reason: string;
     let suggestedAction: string;
 
-    if (level === 'weak') {
-      // 0–39%: Critical priority review
+    if (readiness.blocked && readiness.blockingPrerequisites.length > 0) {
+      const topPrereq = readiness.blockingPrerequisites[0];
+      priority = 'critical';
+      recommendationType = 'review';
+      title = `PREREQUISITE FIRST: ${topPrereq.concept}`;
+      reason = `Before continuing ${record.concept}, strengthen ${topPrereq.concept}. Your current ${topPrereq.concept} mastery is ${topPrereq.masteryScore}%, and it is an important prerequisite.`;
+      suggestedAction = `Strengthen prerequisite concept ${topPrereq.concept} before proceeding with ${record.concept}.`;
+    } else if (level === 'weak') {
       priority = record.mastery_score < 20 ? 'critical' : 'high';
       recommendationType = 'review';
       title = `Priority Review: ${record.concept}`;
       reason = `Your recent assessment score for ${record.concept} is ${record.mastery_score}%, indicating this concept needs immediate reinforcement.`;
       suggestedAction = `Review ${record.concept} core study notes before attempting further lessons.`;
     } else if (level === 'developing') {
-      // 40–69%: Medium priority reinforcement
       priority = 'medium';
       recommendationType = 'reinforce';
       title = `Reinforce Concept: ${record.concept}`;
       reason = `You have developing understanding of ${record.concept} (${record.mastery_score}%). A targeted practice session will build solid proficiency.`;
       suggestedAction = `Practice additional quiz questions focusing on ${record.concept}.`;
     } else {
-      // 70–84%: Low priority practice
       priority = 'low';
       recommendationType = 'practice';
       title = `Mastery Practice: ${record.concept}`;
@@ -128,14 +150,23 @@ export function generateAdaptiveRecommendations(
       attemptCount: record.attempt_count,
       lastPracticedAt: record.last_practiced_at,
       lessonId: record.lesson_id || null,
+      readinessScore: readiness.readinessScore,
+      blocked: readiness.blocked,
+      blockingPrerequisites: readiness.blockingPrerequisites.map((bp) => ({
+        concept: bp.concept,
+        masteryScore: bp.masteryScore,
+      })),
     });
   }
 
   // Deterministic Sorting:
-  // 1. Lowest mastery score first
-  // 2. Higher questions_attempted / attempt_count second (more evidence)
-  // 3. Older last_practiced_at third
+  // 1. Blocked concepts or Root Prerequisite Gaps receive highest priority boost
+  // 2. Lowest mastery score second
+  // 3. Higher questions_attempted / attempt_count third
   candidates.sort((a, b) => {
+    if (a.blocked !== b.blocked) {
+      return a.blocked ? -1 : 1; // Blocked concepts boosted first
+    }
     if (a.masteryScore !== b.masteryScore) {
       return a.masteryScore - b.masteryScore;
     }

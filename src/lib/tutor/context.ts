@@ -1,6 +1,12 @@
 import { adminClient } from '@/lib/supabase/admin';
 import { generateAdaptiveRecommendations, ConceptMasteryRecordInput } from '@/lib/adaptive/recommendations';
 import { getRelevantTutorMemories, TutorMemoryItem } from './memory';
+import {
+  getUserConceptRelationships,
+  calculateConceptReadiness,
+  detectRootKnowledgeGaps,
+  normalizeGraphConcept,
+} from '@/lib/adaptive/knowledge-graph';
 
 export interface ConceptMasteryItem {
   concept: string;
@@ -50,6 +56,12 @@ export interface TutorContext {
   topRecommendations: string[];
   hasActiveAssessment: boolean;
   tutorMemories: TutorMemoryItem[];
+  knowledgeGraphIntelligence?: {
+    readinessScore: number;
+    blocked: boolean;
+    blockingPrerequisites: Array<{ concept: string; masteryScore: number; strength: number }>;
+    rootGaps: Array<{ concept: string; rootGapScore: number; blockingCount: number }>;
+  };
 }
 
 /**
@@ -85,7 +97,7 @@ export function resolvePrimaryTargetConcept(context: TutorContext): PrimaryTarge
 
 /**
  * Bounded, server-only context builder for CYRA's Context-Aware AI Tutor.
- * Assembles student mastery intelligence, recent quiz mistakes, practice history, lesson materials, and tutor memories.
+ * Assembles student mastery intelligence, recent quiz mistakes, practice history, lesson materials, tutor memories, and knowledge graph intelligence.
  */
 export async function buildTutorContext({
   userId,
@@ -109,6 +121,8 @@ export async function buildTutorContext({
   };
 
   try {
+    const masteryMap = new Map<string, number>();
+
     // 1. FETCH USER CONCEPT MASTERY
     const { data: masteryRows } = await adminClient
       .from('user_concept_mastery')
@@ -117,15 +131,18 @@ export async function buildTutorContext({
       .order('mastery_score', { ascending: true });
 
     if (masteryRows && masteryRows.length > 0) {
-      const records: ConceptMasteryRecordInput[] = masteryRows.map((r) => ({
-        concept: r.concept,
-        mastery_score: r.mastery_score,
-        questions_attempted: r.questions_attempted,
-        questions_correct: r.questions_correct,
-        attempt_count: r.attempt_count,
-        last_result: r.last_result,
-        last_practiced_at: r.last_practiced_at,
-      }));
+      const records: ConceptMasteryRecordInput[] = masteryRows.map((r) => {
+        masteryMap.set(normalizeGraphConcept(r.concept), r.mastery_score);
+        return {
+          concept: r.concept,
+          mastery_score: r.mastery_score,
+          questions_attempted: r.questions_attempted,
+          questions_correct: r.questions_correct,
+          attempt_count: r.attempt_count,
+          last_result: r.last_result,
+          last_practiced_at: r.last_practiced_at,
+        };
+      });
 
       // Group concepts by mastery level
       for (const r of masteryRows) {
@@ -306,6 +323,36 @@ export async function buildTutorContext({
       });
     } catch (memErr) {
       console.warn('[TUTOR CONTEXT] Error fetching tutor memories:', memErr);
+    }
+
+    // 7. BUILD KNOWLEDGE GRAPH INTELLIGENCE
+    try {
+      const target = resolvePrimaryTargetConcept(context);
+      const relationships = await getUserConceptRelationships(userId);
+
+      const readiness = calculateConceptReadiness({
+        targetConcept: target.concept,
+        masteryMap,
+        relationships,
+      });
+
+      const rootGaps = detectRootKnowledgeGaps({
+        masteryMap,
+        relationships,
+      });
+
+      context.knowledgeGraphIntelligence = {
+        readinessScore: readiness.readinessScore,
+        blocked: readiness.blocked,
+        blockingPrerequisites: readiness.blockingPrerequisites,
+        rootGaps: rootGaps.map((rg) => ({
+          concept: rg.concept,
+          rootGapScore: rg.rootGapScore,
+          blockingCount: rg.blockingCount,
+        })),
+      };
+    } catch (kgErr) {
+      console.warn('[TUTOR CONTEXT] Error calculating knowledge graph intelligence:', kgErr);
     }
   } catch (err) {
     console.error('[TUTOR CONTEXT] Error building tutor context:', err);

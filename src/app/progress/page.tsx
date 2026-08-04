@@ -14,7 +14,8 @@ import {
   ArrowRight,
   Zap,
   BookMarked,
-  Loader2
+  Loader2,
+  GitBranch
 } from 'lucide-react';
 import { mockUserStats } from '@/data/mockData';
 import { createClient } from '@/lib/supabase/client';
@@ -39,6 +40,9 @@ export interface AdaptiveRecommendationUI {
   reason: string;
   suggestedAction: string;
   lessonId?: string | null;
+  readinessScore?: number;
+  blocked?: boolean;
+  blockingPrerequisites?: Array<{ concept: string; masteryScore: number }>;
 }
 
 export interface AdaptiveSummaryUI {
@@ -47,6 +51,14 @@ export interface AdaptiveSummaryUI {
   developingConcepts: number;
   proficientConcepts: number;
   masteredConcepts: number;
+}
+
+export interface RootGapUI {
+  concept: string;
+  masteryScore: number;
+  rootGapScore: number;
+  affectedDownstreamConcepts: Array<{ concept: string; masteryScore: number }>;
+  blockingCount: number;
 }
 
 export default function ProgressPage() {
@@ -59,6 +71,7 @@ export default function ProgressPage() {
   const [recsError, setRecsError] = useState<string | null>(null);
   const [generatingConcept, setGeneratingConcept] = useState<string | null>(null);
   const [genError, setGenError] = useState<string | null>(null);
+  const [rootGaps, setRootGaps] = useState<RootGapUI[]>([]);
 
   useEffect(() => {
     async function fetchData() {
@@ -96,6 +109,17 @@ export default function ProgressPage() {
         setRecsError('Could not connect to recommendation engine.');
       } finally {
         setLoadingRecs(false);
+      }
+
+      // 3. Fetch knowledge graph intelligence from GET /api/adaptive/knowledge-graph
+      try {
+        const kgRes = await fetch('/api/adaptive/knowledge-graph');
+        const kgResult = await kgRes.json();
+        if (kgRes.ok && kgResult.success && kgResult.data) {
+          setRootGaps(kgResult.data.rootGaps || []);
+        }
+      } catch (kgErr) {
+        console.warn('[PROGRESS] Error fetching knowledge graph:', kgErr);
       }
     }
 
@@ -165,7 +189,52 @@ export default function ProgressPage() {
         })}
       </div>
 
-      {/* STAGE 12.5A & 12.5B: ADAPTIVE LEARNING RECOMMENDATIONS SECTION */}
+      {/* STAGE 12.8A: ROOT KNOWLEDGE GAPS SECTION */}
+      {rootGaps.length > 0 && (
+        <div className="p-6 rounded-2xl glass-panel border border-amber-900/40 bg-amber-950/10 space-y-4 shadow-xl">
+          <div className="flex items-center justify-between border-b border-amber-900/30 pb-3">
+            <div className="flex items-center gap-2">
+              <div className="p-1.5 rounded-lg bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                <GitBranch className="w-4 h-4" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-white tracking-wide">Root Knowledge Gaps Detected</h3>
+                <p className="text-[11px] text-zinc-400">Prerequisite concepts holding back downstream learning progress.</p>
+              </div>
+            </div>
+            <span className="text-[10px] font-mono text-amber-400 font-bold uppercase bg-amber-950/60 px-2.5 py-1 rounded-md border border-amber-500/30">
+              {rootGaps.length} Root Gaps
+            </span>
+          </div>
+
+          <div className="space-y-3">
+            {rootGaps.map((rg, idx) => (
+              <div key={idx} className="p-4 rounded-xl bg-zinc-950/80 border border-amber-900/40 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-amber-300">{rg.concept}</span>
+                  <span className="text-xs font-mono font-bold text-white">Mastery: {rg.masteryScore}%</span>
+                </div>
+                {rg.affectedDownstreamConcepts.length > 0 && (
+                  <div className="text-[11px] text-zinc-400">
+                    <span className="text-[10px] font-mono uppercase text-zinc-500 font-semibold block mb-1">
+                      Strengthening this concept may improve ({rg.blockingCount} dependent concepts):
+                    </span>
+                    <ul className="list-disc list-inside space-y-0.5 font-mono text-[10px] text-zinc-300">
+                      {rg.affectedDownstreamConcepts.slice(0, 3).map((dep, dIdx) => (
+                        <li key={dIdx}>
+                          {dep.concept} ({dep.masteryScore}% mastery)
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* STAGE 12.5A & 12.5B & 12.8A: ADAPTIVE LEARNING RECOMMENDATIONS SECTION */}
       <div className="p-6 rounded-2xl glass-panel border border-zinc-800/80 space-y-5 shadow-xl">
         <div className="flex items-center justify-between border-b border-zinc-900 pb-4">
           <div className="flex items-center gap-2">
@@ -174,7 +243,7 @@ export default function ProgressPage() {
             </div>
             <div>
               <h3 className="text-sm font-bold text-white tracking-wide">Adaptive Learning Recommendations</h3>
-              <p className="text-[11px] text-zinc-400">Targeted priorities generated by CYRA&apos;s concept mastery intelligence engine.</p>
+              <p className="text-[11px] text-zinc-400">Targeted priorities generated by CYRA&apos;s concept mastery and knowledge graph engine.</p>
             </div>
           </div>
           {summary && (
@@ -217,11 +286,14 @@ export default function ProgressPage() {
         ) : (
           <div className="space-y-4">
             {recommendations.slice(0, 3).map((rec, idx) => {
+              const isBlocked = rec.blocked === true;
               const isCritical = rec.priority === 'critical' || rec.priority === 'high';
               const isMedium = rec.priority === 'medium';
               const isGeneratingThis = generatingConcept === rec.concept;
 
-              const priorityPillClass = isCritical
+              const priorityPillClass = isBlocked
+                ? 'bg-amber-950/80 border-amber-500/50 text-amber-300 font-extrabold'
+                : isCritical
                 ? 'bg-red-950/60 border-red-500/40 text-red-300'
                 : isMedium
                 ? 'bg-amber-950/60 border-amber-500/40 text-amber-300'
@@ -231,7 +303,9 @@ export default function ProgressPage() {
                 <div 
                   key={idx} 
                   className={`p-5 rounded-xl border space-y-3 transition-all ${
-                    isCritical 
+                    isBlocked
+                      ? 'bg-amber-950/20 border-amber-800/40'
+                      : isCritical 
                       ? 'bg-red-950/10 border-red-900/30' 
                       : isMedium 
                       ? 'bg-amber-950/10 border-amber-900/30' 
@@ -239,12 +313,15 @@ export default function ProgressPage() {
                   }`}
                 >
                   <div className="flex items-center justify-between gap-3 flex-wrap">
-                    <span className={`text-[10px] font-mono font-bold uppercase px-2.5 py-0.5 rounded border ${priorityPillClass}`}>
-                      {rec.priority.toUpperCase()} PRIORITY ({rec.recommendationType.toUpperCase()})
+                    <span className={`text-[10px] font-mono uppercase px-2.5 py-0.5 rounded border ${priorityPillClass}`}>
+                      {isBlocked ? 'PREREQUISITE FIRST' : `${rec.priority.toUpperCase()} PRIORITY (${rec.recommendationType.toUpperCase()})`}
                     </span>
 
                     <span className="text-[11px] font-mono text-zinc-400">
                       <strong className="text-white">{rec.masteryScore}%</strong> mastery · <span className="uppercase">{rec.masteryLevel}</span>
+                      {rec.readinessScore !== undefined && (
+                        <span> · Readiness: <strong className="text-cyan-400">{rec.readinessScore}%</strong></span>
+                      )}
                     </span>
                   </div>
 
@@ -271,7 +348,7 @@ export default function ProgressPage() {
                           </>
                         ) : (
                           <>
-                            Practice This Concept
+                            {isBlocked ? 'Fix Prerequisite First' : 'Practice This Concept'}
                             <ArrowRight className="w-3.5 h-3.5" />
                           </>
                         )}

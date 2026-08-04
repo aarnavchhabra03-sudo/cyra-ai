@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { adminClient } from '@/lib/supabase/admin';
 import { getAIProvider } from '@/lib/ai/provider';
+import { getUserConceptRelationships, calculateConceptReadiness, normalizeGraphConcept } from '@/lib/adaptive/knowledge-graph';
 
 export async function POST(request: Request) {
   // 1. Authenticate user session
@@ -115,17 +116,44 @@ export async function POST(request: Request) {
       );
     }
 
-    // 4. RETRIEVE CURRENT CONCEPT MASTERY
-    const { data: masteryRow } = await adminClient
+    // 4. RETRIEVE ALL USER CONCEPT MASTERY & KNOWLEDGE GRAPH RELATIONSHIPS
+    const { data: allMasteryRows } = await adminClient
       .from('user_concept_mastery')
-      .select('mastery_score')
-      .eq('user_id', user.id)
-      .eq('concept', concept)
-      .maybeSingle();
+      .select('concept, mastery_score')
+      .eq('user_id', user.id);
 
-    const masteryBefore = masteryRow?.mastery_score || 0;
+    const masteryMap = new Map<string, number>();
+    if (allMasteryRows) {
+      for (const row of allMasteryRows) {
+        masteryMap.set(normalizeGraphConcept(row.concept), row.mastery_score);
+      }
+    }
 
-    // Determine targeted question difficulty based on current mastery
+    const relationships = await getUserConceptRelationships(user.id);
+
+    // 5. EVALUATE PREREQUISITE READINESS & BLOCKED STATUS
+    const readiness = calculateConceptReadiness({
+      targetConcept: concept,
+      masteryMap,
+      relationships,
+    });
+
+    let targetConceptToPractice = concept;
+    let redirectedToPrerequisite = false;
+    let redirectionReason: string | undefined = undefined;
+
+    if (readiness.blocked && readiness.blockingPrerequisites.length > 0) {
+      const topPrereq = readiness.blockingPrerequisites[0];
+      targetConceptToPractice = topPrereq.concept;
+      redirectedToPrerequisite = true;
+      redirectionReason = `Your current ${topPrereq.concept} mastery is ${topPrereq.masteryScore}%. Strengthening this prerequisite first will ensure success in ${concept}.`;
+
+      console.log(`[PRACTICE GENERATE] BLOCKED CONCEPT DETECTED! Redirecting practice from "${concept}" to prerequisite "${targetConceptToPractice}"`);
+    }
+
+    const masteryBefore = masteryMap.get(normalizeGraphConcept(targetConceptToPractice)) || 0;
+
+    // Determine targeted question difficulty based on current mastery of targetConceptToPractice
     let targetDifficulty = 'beginner';
     if (masteryBefore >= 70) {
       targetDifficulty = 'advanced';
@@ -133,8 +161,8 @@ export async function POST(request: Request) {
       targetDifficulty = 'intermediate';
     }
 
-    // 5. CALL AI PROVIDER TO GENERATE TARGETED QUESTIONS
-    console.log(`[PRACTICE GENERATE] Generating targeted practice for concept "${concept}" (mastery: ${masteryBefore}%)`);
+    // 6. CALL AI PROVIDER TO GENERATE TARGETED QUESTIONS
+    console.log(`[PRACTICE GENERATE] Generating targeted practice for concept "${targetConceptToPractice}" (mastery: ${masteryBefore}%)`);
     const provider = getAIProvider();
 
     const studyNotes = Array.isArray(lessonRecord.study_notes)
@@ -149,7 +177,7 @@ export async function POST(request: Request) {
       lessonTitle: lessonRecord.title,
       lessonDescription: lessonDesc,
       lessonContent: lessonRecord.content || '',
-      keyConcepts: [concept],
+      keyConcepts: [targetConceptToPractice],
       experienceLevel: targetDifficulty,
     });
 
@@ -168,13 +196,13 @@ export async function POST(request: Request) {
     // Take top 5 questions from AI response
     const rawQuestions = aiResponse.data.questions.slice(0, 5);
 
-    // 6. PERSIST PRACTICE SESSION IN DATABASE
+    // 7. PERSIST PRACTICE SESSION IN DATABASE
     const { data: sessionRecord, error: sessionErr } = await adminClient
       .from('adaptive_practice_sessions')
       .insert({
         user_id: user.id,
         lesson_id: lessonId,
-        concept: concept,
+        concept: targetConceptToPractice,
         mastery_before: masteryBefore,
         status: 'active',
       })
@@ -193,7 +221,7 @@ export async function POST(request: Request) {
       );
     }
 
-    // 7. PERSIST PRACTICE QUESTIONS IN BATCH
+    // 8. PERSIST PRACTICE QUESTIONS IN BATCH
     const questionRows = rawQuestions.map((q, idx) => ({
       session_id: sessionRecord.id,
       question_order: idx + 1,
@@ -202,7 +230,7 @@ export async function POST(request: Request) {
       options: q.options || [],
       correct_answer: q.correct_answer || { option_id: 'A' },
       explanation: q.explanation || '',
-      concept: concept,
+      concept: targetConceptToPractice,
       difficulty: q.difficulty || targetDifficulty,
       points: q.points || 1,
     }));
@@ -225,12 +253,15 @@ export async function POST(request: Request) {
       );
     }
 
-    // 8. RETURN SAFE PAYLOAD (OMITTING correct_answer)
+    // 9. RETURN SAFE PAYLOAD WITH PREREQUISITE REDIRECTION METADATA
     return NextResponse.json({
       success: true,
       data: {
         sessionId: sessionRecord.id,
-        concept: concept,
+        concept: targetConceptToPractice,
+        requestedConcept: concept,
+        redirectedToPrerequisite,
+        redirectionReason,
         masteryBefore: masteryBefore,
         questionCount: insertedQuestions.length,
         questions: insertedQuestions,

@@ -68,7 +68,29 @@ export function selectTeachingStrategy(
     rationaleCodes.push('HIGH_MASTERY');
   }
 
-  // 2. MEMORY OVERRIDES (Using Relevance & Reliability Scores)
+  // 2. KNOWLEDGE GRAPH OVERRIDES
+  const kg = context.knowledgeGraphIntelligence;
+  if (kg) {
+    if (kg.blocked) {
+      if (!rationaleCodes.includes('BLOCKED_BY_PREREQUISITE')) {
+        rationaleCodes.push('BLOCKED_BY_PREREQUISITE');
+      }
+      if (!rationaleCodes.includes('LOW_PREREQUISITE_READINESS')) {
+        rationaleCodes.push('LOW_PREREQUISITE_READINESS');
+      }
+      if (strategy === 'application' || strategy === 'challenge') {
+        strategy = 'guided_reasoning';
+        explanationDepth = 'moderate';
+      }
+    }
+    if (kg.rootGaps && kg.rootGaps.length > 0) {
+      if (!rationaleCodes.includes('ROOT_KNOWLEDGE_GAP')) {
+        rationaleCodes.push('ROOT_KNOWLEDGE_GAP');
+      }
+    }
+  }
+
+  // 3. MEMORY OVERRIDES (Using Relevance & Reliability Scores)
   // Strict check: Memories must be active AND relevant to the target concept (not irrelevant)
   const activeMemories = (context.tutorMemories || []).filter(
     (m) => !m.resolvedAt && m.relevance !== 'irrelevant'
