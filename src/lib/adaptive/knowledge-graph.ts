@@ -105,11 +105,10 @@ export async function seedDefaultKnowledgeGraph(userId: string): Promise<void> {
 
 /**
  * Loads concept relationships for a user.
+ * Returns empty array if no graph edges exist yet for user.
  */
 export async function getUserConceptRelationships(userId: string): Promise<ConceptRelationship[]> {
   try {
-    await seedDefaultKnowledgeGraph(userId);
-
     const { data: rows, error } = await adminClient
       .from('concept_relationships')
       .select('*')

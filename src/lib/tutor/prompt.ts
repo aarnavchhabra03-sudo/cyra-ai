@@ -94,6 +94,24 @@ If the student asks what to study, practice, or focus on next, recommend "${rec.
 `;
   }
 
+  // Format next best action context
+  const nbaCtx = context.nextBestAction;
+  let nbaSection = '';
+  if (nbaCtx) {
+    nbaSection = `
+============================================================
+<NEXT_BEST_ACTION_CONTEXT>
+Authoritative Next Best Action: ${nbaCtx.action.toUpperCase()}
+Target Concept: "${nbaCtx.concept || 'Current Curriculum Topic'}"
+Priority Score: ${nbaCtx.priorityScore}/100 (Reason Code: ${nbaCtx.reasonCode})
+Recommended Action Reason: ${nbaCtx.reason}
+
+DIRECTIVE FOR "WHAT SHOULD I DO NOW?" QUESTIONS:
+If the student asks what to do now, advise them: "${nbaCtx.reason}"
+</NEXT_BEST_ACTION_CONTEXT>
+`;
+  }
+
   // Active Assessment Directives
   let activeAssessmentDirective = '';
   if (context.hasActiveAssessment) {
@@ -200,6 +218,7 @@ ${activeAssessmentDirective}
 ${teachingPlanSection}
 ${kgSection}
 ${planCtxSection}
+${nbaSection}
 ============================================================
 PRIMARY TARGET CONCEPT FOR QUICK ACTIONS
 ============================================================

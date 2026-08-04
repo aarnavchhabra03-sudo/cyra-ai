@@ -8,6 +8,7 @@ import {
   normalizeGraphConcept,
 } from '@/lib/adaptive/knowledge-graph';
 import { generateAdaptiveLearningPlan } from '@/lib/adaptive/learning-plan';
+import { buildLearnerStateSnapshot, determineNextBestAction } from '@/lib/adaptive/orchestrator';
 
 export interface ConceptMasteryItem {
   concept: string;
@@ -78,6 +79,13 @@ export interface TutorContext {
       concept: string;
       blockingPrerequisite: string;
     };
+  };
+  nextBestAction?: {
+    action: string;
+    concept: string | null;
+    priorityScore: number;
+    reasonCode: string;
+    reason: string;
   };
 }
 
@@ -395,6 +403,21 @@ export async function buildTutorContext({
       }
     } catch (planErr) {
       console.warn('[TUTOR CONTEXT] Error calculating adaptive learning plan context:', planErr);
+    }
+
+    // 9. BUILD ORCHESTRATED NEXT BEST ACTION SUMMARY
+    try {
+      const snapshot = await buildLearnerStateSnapshot({ userId, currentLessonId: lessonId });
+      const nba = determineNextBestAction(snapshot);
+      context.nextBestAction = {
+        action: nba.action,
+        concept: nba.concept,
+        priorityScore: nba.priorityScore,
+        reasonCode: nba.reasonCode,
+        reason: nba.reason,
+      };
+    } catch (nbaErr) {
+      console.warn('[TUTOR CONTEXT] Error calculating next best action context:', nbaErr);
     }
   } catch (err) {
     console.error('[TUTOR CONTEXT] Error building tutor context:', err);
