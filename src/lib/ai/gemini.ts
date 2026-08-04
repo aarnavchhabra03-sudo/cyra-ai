@@ -12,8 +12,8 @@ import {
   GenerateQuizOptions,
   AIQuizResponse
 } from './types';
-import { validateLearningPath, LearningPathGeneration } from '@/types/ai';
-import { validateStudyNotes, validateResourcePlan, validateQuizData } from './groq';
+import { validateLearningPath, LearningPathGeneration, validateStudyNotesObject } from '@/types/ai';
+import { validateResourcePlan, validateQuizData } from './groq';
 
 export const GEMINI_MODEL = 'gemini-2.0-flash-lite';
 
@@ -185,7 +185,16 @@ You MUST respond strictly with a valid JSON object matching this exact schema st
 
       const response = await ai.models.generateContent({
         model: GEMINI_MODEL,
-        contents: `Generate structured study notes JSON for lesson "${options.lessonTitle}" in course "${options.courseTitle || ''}" (${options.moduleTitle || ''}). Include JSON object with keys: overview (string), explanation (string), key_concepts (array of strings), examples (array of strings), important_points (array of strings), quick_revision (string).`,
+        contents: `Generate structured study notes JSON for lesson "${options.lessonTitle}" in course "${options.courseTitle || ''}" (${options.moduleTitle || ''}).
+You MUST respond strictly with a valid JSON object matching this exact schema:
+{
+  "overview": "Clear 2-3 sentence overview introducing the lesson topic.",
+  "explanation": "Detailed conceptual explanation including key components, architecture, and principles.",
+  "key_concepts": ["Concept Name 1", "Concept Name 2"],
+  "examples": ["Practical example 1 illustrating the concept", "Real-world analogy or implementation"],
+  "important_points": ["Critical takeaway or fact 1", "Common misconception to watch out for"],
+  "quick_revision": "A bulleted or paragraph summary for fast review before assessments."
+}`,
       });
 
       const rawText = response.text?.trim();
@@ -199,23 +208,38 @@ You MUST respond strictly with a valid JSON object matching this exact schema st
         };
       }
 
-      const parsed = JSON.parse(rawText.replace(/```json|```/g, '').trim());
-      if (!validateStudyNotes(parsed)) {
+      let parsed: any;
+      try {
+        parsed = JSON.parse(rawText.replace(/```json|```/g, '').trim());
+      } catch (err) {
+        console.error('Failed to parse Study Notes JSON:', rawText);
         return {
           success: false,
           provider: 'gemini',
           model: GEMINI_MODEL,
-          error: 'AI response failed study notes validation.',
-          code: 'VALIDATION_ERROR',
+          error: 'AI returned malformed non-JSON output.',
+          code: 'INVALID_JSON',
         };
       }
 
-      return {
-        success: true,
-        data: parsed,
-        provider: 'gemini',
-        model: GEMINI_MODEL,
-      };
+      try {
+        const validatedNotes = validateStudyNotesObject(parsed);
+        return {
+          success: true,
+          data: validatedNotes,
+          provider: 'gemini',
+          model: GEMINI_MODEL,
+        };
+      } catch (validationErr: any) {
+        console.error('Study notes validation error:', validationErr);
+        return {
+          success: false,
+          provider: 'gemini',
+          model: GEMINI_MODEL,
+          error: `AI response failed study notes validation: ${validationErr.message || validationErr}`,
+          code: 'VALIDATION_ERROR',
+        };
+      }
     } catch (error: any) {
       return {
         success: false,

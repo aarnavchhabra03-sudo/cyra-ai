@@ -15,7 +15,7 @@ import {
   AIQuizResponse,
   GeneratedQuizData
 } from './types';
-import { validateLearningPath, LearningPathGeneration } from '@/types/ai';
+import { validateLearningPath, LearningPathGeneration, validateStudyNotesObject } from '@/types/ai';
 
 // Centralized Groq model definition
 export const GROQ_MODEL = 'llama-3.3-70b-versatile';
@@ -127,7 +127,18 @@ You MUST respond strictly with a valid JSON object matching this exact schema:
 `;
 
 const SYSTEM_STUDY_NOTES_INSTRUCTION = `You are CYRA AI, a master educator and academic study notes synthesizer.
-Your mission is to generate a comprehensive, highly structured, beginner-friendly study guide for a specific lesson topic.`;
+Your mission is to generate a comprehensive, highly structured, beginner-friendly study guide for a specific lesson topic.
+
+You MUST respond strictly with a valid JSON object matching this exact schema:
+{
+  "overview": "Clear 2-3 sentence overview introducing the lesson topic.",
+  "explanation": "Detailed conceptual explanation including key components, architecture, and principles.",
+  "key_concepts": ["Concept Name 1", "Concept Name 2"],
+  "examples": ["Practical example 1 illustrating the concept", "Real-world analogy or implementation"],
+  "important_points": ["Critical takeaway or fact 1", "Common misconception to watch out for"],
+  "quick_revision": "A bulleted or paragraph summary for fast review before assessments."
+}
+`;
 
 const SYSTEM_RESOURCE_PLANNER_INSTRUCTION = `You are CYRA AI, an expert educational resource curator.
 Your mission is to generate a high-quality, balanced Resource Discovery Plan for a specific lesson topic.`;
@@ -431,22 +442,24 @@ Generate structured study notes strictly adhering to the JSON schema.`;
         };
       }
 
-      if (!validateStudyNotes(parsedJson)) {
+      try {
+        const validatedNotes = validateStudyNotesObject(parsedJson);
+        return {
+          success: true,
+          data: validatedNotes,
+          provider: 'groq',
+          model: GROQ_MODEL,
+        };
+      } catch (validationErr: any) {
+        console.error('Study notes validation error:', validationErr);
         return {
           success: false,
           provider: 'groq',
           model: GROQ_MODEL,
-          error: 'AI response failed study notes schema validation.',
+          error: `AI response failed study notes schema validation: ${validationErr.message || validationErr}`,
           code: 'VALIDATION_ERROR',
         };
       }
-
-      return {
-        success: true,
-        data: parsedJson,
-        provider: 'groq',
-        model: GROQ_MODEL,
-      };
     } catch (error: any) {
       const status = error?.status || error?.statusCode;
       if (status === 429) {

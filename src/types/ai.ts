@@ -68,6 +68,15 @@ export const LearningPathGenerationSchema = z.object({
   modules: z.array(ModuleGenerationSchema).min(1, 'Learning path must contain at least one module'),
 });
 
+export const StudyNotesSchema = z.object({
+  overview: z.string().min(1, 'Overview is required'),
+  explanation: z.string().min(1, 'Explanation is required'),
+  key_concepts: z.array(z.string().min(1)).min(1, 'At least one key concept is required'),
+  examples: z.array(z.string()),
+  important_points: z.array(z.string().min(1)).min(1, 'At least one important point is required'),
+  quick_revision: z.string().min(1, 'Quick revision revision is required'),
+});
+
 export function normalizeLearningPathOutput(raw: any): any {
   if (!raw || typeof raw !== 'object') {
     throw new Error('AI output is not a valid JSON object');
@@ -197,5 +206,110 @@ export function validateLearningPath(data: unknown): LearningPathGeneration {
   } catch (validationErr: any) {
     console.error(`[LEARNING_PATH] VALIDATION_FAILED:`, validationErr.message || validationErr);
     throw validationErr;
+  }
+}
+
+export function normalizeStudyNotesOutput(raw: any): any {
+  if (!raw || typeof raw !== 'object') {
+    throw new Error('AI output is not a valid JSON object');
+  }
+
+  // Recursive unwrapping of common wrapper keys
+  let data = raw;
+  const wrappers = ['studyNotes', 'study_notes', 'notes', 'curriculum', 'data', 'result'];
+  for (let i = 0; i < 5; i++) {
+    let unwrapped = false;
+    for (const wrapper of wrappers) {
+      if (data && typeof data === 'object' && wrapper in data && data[wrapper] && typeof data[wrapper] === 'object' && !Array.isArray(data[wrapper])) {
+        data = data[wrapper];
+        unwrapped = true;
+        break;
+      }
+    }
+    if (!unwrapped) break;
+  }
+
+  // Normalize key naming drift / aliases (e.g. camelCase to snake_case)
+  if (data) {
+    // 1. key_concepts / keyConcepts / keyPoints / key_points
+    const keyConceptsVal = data.key_concepts || data.keyConcepts || data.keyPoints || data.key_points || data.keyconcepts;
+    if (keyConceptsVal) {
+      data.key_concepts = Array.isArray(keyConceptsVal)
+        ? keyConceptsVal
+        : typeof keyConceptsVal === 'string'
+        ? keyConceptsVal.split(',').map((x: string) => x.trim())
+        : [];
+    } else if (!data.key_concepts) {
+      data.key_concepts = [];
+    }
+
+    // 2. important_points / importantPoints / keyPoints / key_points
+    const importantPointsVal = data.important_points || data.importantPoints || data.importantpoints;
+    if (importantPointsVal) {
+      data.important_points = Array.isArray(importantPointsVal)
+        ? importantPointsVal
+        : typeof importantPointsVal === 'string'
+        ? importantPointsVal.split('\n').map((x: string) => x.trim())
+        : [];
+    } else if (!data.important_points) {
+      data.important_points = [];
+    }
+
+    // 3. examples
+    if (!Array.isArray(data.examples)) {
+      data.examples = typeof data.examples === 'string' ? [data.examples] : [];
+    }
+
+    // 4. overview
+    if (typeof data.overview !== 'string') {
+      data.overview = String(data.overview || '').trim();
+    }
+
+    // 5. explanation
+    if (typeof data.explanation !== 'string') {
+      data.explanation = String(data.explanation || '').trim();
+    }
+
+    // 6. quick_revision / quickRevision / revision
+    const quickRevVal = data.quick_revision || data.quickRevision || data.revision || data.quick_revision_points;
+    if (typeof quickRevVal === 'string') {
+      data.quick_revision = quickRevVal;
+    } else if (Array.isArray(quickRevVal)) {
+      data.quick_revision = quickRevVal.join('\n');
+    } else if (!data.quick_revision) {
+      data.quick_revision = '';
+    }
+  }
+
+  return data;
+}
+
+export function validateStudyNotesObject(data: unknown): any {
+  const rawLength = JSON.stringify(data).length;
+  console.log(`[STUDY_NOTES] RAW_OUTPUT_TYPE: ${typeof data} (isArray: ${Array.isArray(data)})`);
+  console.log(`[STUDY_NOTES] RAW_OUTPUT_LENGTH: ${rawLength} characters`);
+  
+  if (data && typeof data === 'object') {
+    console.log(`[STUDY_NOTES] PARSED_KEYS:`, Object.keys(data));
+  }
+
+  // Detect possible truncation
+  const rawStr = typeof data === 'string' ? data : JSON.stringify(data);
+  if (rawStr.endsWith('...') || (!rawStr.endsWith('}') && !rawStr.endsWith(']'))) {
+    console.warn(`[STUDY_NOTES] POSSIBLE_TRUNCATION detected in raw AI string`);
+  }
+
+  const normalized = normalizeStudyNotesOutput(data);
+  if (normalized && typeof normalized === 'object') {
+    console.log(`[STUDY_NOTES] NORMALIZED_KEYS:`, Object.keys(normalized));
+  }
+
+  try {
+    const validated = StudyNotesSchema.parse(normalized);
+    console.log(`[STUDY_NOTES] VALIDATION_RESULT: SUCCESS`);
+    return validated;
+  } catch (err: any) {
+    console.error(`[STUDY_NOTES] VALIDATION_FAILED:`, err.message || err);
+    throw err;
   }
 }

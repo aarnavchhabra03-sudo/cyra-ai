@@ -155,6 +155,18 @@ export async function POST(request: Request) {
         );
       }
 
+      if (aiResponse.code === 'VALIDATION_ERROR') {
+        console.error('[GENERATE STUDY NOTES] Validation failed during AI response generation:', aiResponse.error);
+        return NextResponse.json(
+          {
+            success: false,
+            error: "CYRA couldn't generate valid study notes this time. Please try again.",
+            code: 'VALIDATION_ERROR',
+          },
+          { status: 422 }
+        );
+      }
+
       return NextResponse.json(
         {
           success: false,
