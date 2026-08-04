@@ -4,6 +4,7 @@ import { adminClient } from '@/lib/supabase/admin';
 import { getAIProvider } from '@/lib/ai/provider';
 import { buildTutorContext, resolvePrimaryTargetConcept } from '@/lib/tutor/context';
 import { buildTutorSystemPrompt, isAnswerExtractionAttempt } from '@/lib/tutor/prompt';
+import { extractTutorMemoryCandidates, persistTutorMemories } from '@/lib/tutor/memory';
 
 export async function GET(request: Request) {
   console.log('[TUTOR] GET request received');
@@ -102,7 +103,7 @@ export async function GET(request: Request) {
     const context = await buildTutorContext({ userId: user.id, lessonId });
     const target = resolvePrimaryTargetConcept(context);
 
-    console.log('[TUTOR] context built, target concept:', target.concept, 'mastery:', target.masteryScore, 'hasActiveAssessment:', context.hasActiveAssessment);
+    console.log('[TUTOR] context built, target concept:', target.concept, 'mastery:', target.masteryScore, 'memories:', context.tutorMemories.length);
 
     return NextResponse.json({
       success: true,
@@ -121,6 +122,9 @@ export async function GET(request: Request) {
           proficientConcepts: context.proficientConcepts,
           masteredConcepts: context.masteredConcepts,
           hasActiveAssessment: context.hasActiveAssessment,
+          memoryCount: context.tutorMemories.length,
+          memoryEnabled: true,
+          tutorMemories: context.tutorMemories,
         },
       },
     });
@@ -281,7 +285,7 @@ export async function POST(request: Request) {
     // 6. BUILD TUTOR CONTEXT, RESOLVE TARGET CONCEPT, & CONSTRUCT SYSTEM PROMPT
     const context = await buildTutorContext({ userId: user.id, lessonId });
     const target = resolvePrimaryTargetConcept(context);
-    console.log('[TUTOR] context built, resolved target concept:', target.concept, 'mastery:', target.masteryScore, 'hasActiveAssessment:', context.hasActiveAssessment);
+    console.log('[TUTOR] context built, target concept:', target.concept, 'memories:', context.tutorMemories.length);
 
     const systemInstruction = buildTutorSystemPrompt(context, message, mode);
 
@@ -331,7 +335,27 @@ export async function POST(request: Request) {
 
     console.log('[TUTOR] conversation persisted successfully');
 
-    // 10. RETURN SAFE RESPONSE PAYLOAD
+    // 10. NON-BLOCKING BACKGROUND MEMORY EXTRACTION & PERSISTENCE
+    extractTutorMemoryCandidates({
+      userMessage: message,
+      assistantResponse: assistantResponseText,
+      targetConcept: target.concept,
+    })
+      .then((candidates) => {
+        if (candidates && candidates.length > 0) {
+          persistTutorMemories({
+            userId: user.id,
+            conversationId: convId,
+            lessonId: lessonId || null,
+            memories: candidates,
+          });
+        }
+      })
+      .catch((mErr) => {
+        console.warn('[TUTOR API] Async memory extraction error (non-critical):', mErr);
+      });
+
+    // 11. RETURN SAFE RESPONSE PAYLOAD
     return NextResponse.json({
       success: true,
       data: {
@@ -347,6 +371,9 @@ export async function POST(request: Request) {
           primaryTargetConcept: target.concept,
           primaryTargetLevel: target.level,
           hasActiveAssessment: context.hasActiveAssessment,
+          memoryCount: context.tutorMemories.length,
+          memoryEnabled: true,
+          tutorMemories: context.tutorMemories,
         },
       },
     });

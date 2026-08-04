@@ -1,5 +1,6 @@
 import { adminClient } from '@/lib/supabase/admin';
 import { generateAdaptiveRecommendations, ConceptMasteryRecordInput } from '@/lib/adaptive/recommendations';
+import { getRelevantTutorMemories, TutorMemoryItem } from './memory';
 
 export interface ConceptMasteryItem {
   concept: string;
@@ -48,6 +49,7 @@ export interface TutorContext {
   recentPractice: PracticeHistoryItem[];
   topRecommendations: string[];
   hasActiveAssessment: boolean;
+  tutorMemories: TutorMemoryItem[];
 }
 
 /**
@@ -83,7 +85,7 @@ export function resolvePrimaryTargetConcept(context: TutorContext): PrimaryTarge
 
 /**
  * Bounded, server-only context builder for CYRA's Context-Aware AI Tutor.
- * Assembles student mastery intelligence, recent quiz mistakes, practice history, and lesson materials.
+ * Assembles student mastery intelligence, recent quiz mistakes, practice history, lesson materials, and tutor memories.
  */
 export async function buildTutorContext({
   userId,
@@ -103,6 +105,7 @@ export async function buildTutorContext({
     recentPractice: [],
     topRecommendations: [],
     hasActiveAssessment: false,
+    tutorMemories: [],
   };
 
   try {
@@ -285,6 +288,22 @@ export async function buildTutorContext({
       }
     } catch (activeErr) {
       console.warn('[TUTOR CONTEXT] Error checking active assessment status:', activeErr);
+    }
+
+    // 6. FETCH RELEVANT PERSISTENT TUTOR MEMORIES
+    try {
+      const allConcepts = [
+        ...(context.keyConcepts || []),
+        ...context.weakConcepts.map((c) => c.concept),
+        ...context.developingConcepts.map((c) => c.concept),
+      ];
+      context.tutorMemories = await getRelevantTutorMemories({
+        userId,
+        conceptList: allConcepts,
+        lessonId,
+      });
+    } catch (memErr) {
+      console.warn('[TUTOR CONTEXT] Error fetching tutor memories:', memErr);
     }
   } catch (err) {
     console.error('[TUTOR CONTEXT] Error building tutor context:', err);

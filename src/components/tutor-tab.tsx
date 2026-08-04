@@ -14,7 +14,8 @@ import {
   Zap,
   ChevronDown,
   ChevronUp,
-  RefreshCw
+  RefreshCw,
+  Brain
 } from 'lucide-react';
 
 export interface ChatMessage {
@@ -34,6 +35,17 @@ export interface LearnerContextSummary {
   hasActiveAssessment?: boolean;
   weakConcepts?: Array<{ concept: string; masteryScore: number }>;
   masteredConcepts?: Array<{ concept: string; masteryScore: number }>;
+  memoryCount?: number;
+  memoryEnabled?: boolean;
+  tutorMemories?: Array<{
+    id?: string;
+    concept: string;
+    memoryType: string;
+    content: string;
+    confidence: number;
+    occurrenceCount: number;
+    resolvedAt?: string | null;
+  }>;
 }
 
 interface TutorTabProps {
@@ -259,7 +271,7 @@ export default function TutorTab({ lessonId, initialContext }: TutorTabProps) {
 
       {/* 2. COLLAPSIBLE LEARNER INTELLIGENCE PANEL */}
       {showIntelligence && learnerContext && (
-        <div className="bg-zinc-950/90 border-b border-zinc-800/80 p-3.5 space-y-2 text-xs animate-fade-in">
+        <div className="bg-zinc-950/90 border-b border-zinc-800/80 p-3.5 space-y-2.5 text-xs animate-fade-in">
           <div className="flex items-center justify-between text-[10px] font-mono text-zinc-400 uppercase border-b border-zinc-900 pb-1">
             <span>Adaptive Learner Profile</span>
             {learnerContext.hasActiveAssessment && (
@@ -272,7 +284,7 @@ export default function TutorTab({ lessonId, initialContext }: TutorTabProps) {
           <div className="grid grid-cols-2 gap-2 text-[11px]">
             <div className="p-2 rounded bg-zinc-900/50 border border-zinc-850 space-y-0.5">
               <span className="text-[9px] font-mono text-amber-400 uppercase font-bold block">Needs Review:</span>
-              <p className="text-zinc-200 font-medium">
+              <p className="text-zinc-200 font-medium truncate">
                 {activeWeakConcept 
                   ? `${activeWeakConcept} (${activeWeakScore ?? 0}%)` 
                   : 'No critical weak concepts'}
@@ -281,13 +293,37 @@ export default function TutorTab({ lessonId, initialContext }: TutorTabProps) {
 
             <div className="p-2 rounded bg-zinc-900/50 border border-zinc-850 space-y-0.5">
               <span className="text-[9px] font-mono text-emerald-400 uppercase font-bold block">Strong Concepts:</span>
-              <p className="text-zinc-200 font-medium">
+              <p className="text-zinc-200 font-medium truncate">
                 {learnerContext.masteredConcepts && learnerContext.masteredConcepts.length > 0
                   ? `${learnerContext.masteredConcepts[0].concept} (${learnerContext.masteredConcepts[0].masteryScore}%)`
                   : 'Building mastery baseline...'}
               </p>
             </div>
           </div>
+
+          {/* LEARNING MEMORY SUMMARY AREA */}
+          {learnerContext.tutorMemories && learnerContext.tutorMemories.length > 0 && (
+            <div className="pt-1 border-t border-zinc-900 space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="text-[9px] font-mono text-cyan-400 font-bold uppercase flex items-center gap-1">
+                  <Brain className="w-3 h-3 text-cyan-400" />
+                  Learning Memory ({learnerContext.tutorMemories.length}):
+                </span>
+              </div>
+              <div className="flex flex-wrap gap-1.5 pt-0.5">
+                {learnerContext.tutorMemories.slice(0, 3).map((mem, idx) => (
+                  <span
+                    key={mem.id || idx}
+                    className="text-[9px] font-mono px-2 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-zinc-300 flex items-center gap-1"
+                    title={mem.content}
+                  >
+                    <span className="text-indigo-400 font-semibold uppercase">{mem.memoryType.replace('_', ' ')}:</span>
+                    <span className="text-zinc-200">{mem.concept}</span>
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
