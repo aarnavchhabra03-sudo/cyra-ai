@@ -94,7 +94,37 @@ export function validateQuizData(data: any): data is GeneratedQuizData {
 }
 
 const SYSTEM_CURRICULUM_ARCHITECT_INSTRUCTION = `You are CYRA AI, an elite curriculum architect and master educator.
-Your sole mission is to synthesize deeply tailored, highly personalized, and structurally distinct learning paths.`;
+Your sole mission is to synthesize deeply tailored, highly personalized, and structurally distinct learning paths.
+
+You MUST respond strictly with a valid JSON object matching this exact schema:
+{
+  "title": "Compelling and clear title for this learning path",
+  "description": "Thorough, engaging description of the customized journey",
+  "difficulty": "beginner" | "intermediate" | "advanced",
+  "estimatedWeeks": 4,
+  "weeklyHours": 5,
+  "prerequisites": ["Basic understanding of X", "Access to tool Y"],
+  "learningOutcomes": ["Confidently write and execute Z", "Understand core principles of W"],
+  "modules": [
+    {
+      "title": "Module Title",
+      "description": "Description of what this module covers",
+      "order": 1,
+      "estimatedHours": 10,
+      "objectives": ["Understand X", "Master Y"],
+      "lessons": [
+        {
+          "title": "Lesson Title",
+          "description": "Lesson description",
+          "order": 1,
+          "estimatedMinutes": 45,
+          "keyConcepts": ["Concept A", "Concept B"]
+        }
+      ]
+    }
+  ]
+}
+`;
 
 const SYSTEM_STUDY_NOTES_INSTRUCTION = `You are CYRA AI, a master educator and academic study notes synthesizer.
 Your mission is to generate a comprehensive, highly structured, beginner-friendly study guide for a specific lesson topic.`;

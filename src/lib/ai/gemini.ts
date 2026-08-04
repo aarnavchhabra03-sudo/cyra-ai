@@ -103,7 +103,35 @@ export class GeminiProvider implements AIProvider {
 
       const response = await ai.models.generateContent({
         model: GEMINI_MODEL,
-        contents: `Generate a personalized learning path JSON for topic "${options.topic}" (Difficulty: ${options.experienceLevel}, Goal: ${options.goal}, Minutes/day: ${options.minutesPerDay}). Include title, description, difficulty, estimatedWeeks, weeklyHours, prerequisites, learningOutcomes, modules (with title, description, order, estimatedHours, objectives, lessons).`,
+        contents: `Generate a personalized learning path JSON for topic "${options.topic}" (Difficulty: ${options.experienceLevel}, Goal: ${options.goal}, Minutes/day: ${options.minutesPerDay}).
+You MUST respond strictly with a valid JSON object matching this exact schema structure:
+{
+  "title": "Learning path title",
+  "description": "Engaging description",
+  "difficulty": "beginner" | "intermediate" | "advanced",
+  "estimatedWeeks": 4,
+  "weeklyHours": 5,
+  "prerequisites": ["Prereq 1"],
+  "learningOutcomes": ["Outcome 1"],
+  "modules": [
+    {
+      "title": "Module Title",
+      "description": "Module description",
+      "order": 1,
+      "estimatedHours": 10,
+      "objectives": ["Objective 1"],
+      "lessons": [
+        {
+          "title": "Lesson Title",
+          "description": "Lesson description",
+          "order": 1,
+          "estimatedMinutes": 45,
+          "keyConcepts": ["Concept 1"]
+        }
+      ]
+    }
+  ]
+}`,
       });
 
       const rawText = response.text?.trim();

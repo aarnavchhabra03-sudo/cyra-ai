@@ -141,6 +141,18 @@ export async function POST(request: Request) {
         );
       }
 
+      if (code === 'VALIDATION_ERROR') {
+        console.error('[LEARNING_PATH] Validation failed during AI response generation:', aiResponse.error);
+        return NextResponse.json(
+          {
+            success: false,
+            error: "CYRA couldn't generate a valid learning path this time. Please retry.",
+            code: 'VALIDATION_ERROR',
+          },
+          { status: 422 }
+        );
+      }
+
       return NextResponse.json(
         {
           success: false,
