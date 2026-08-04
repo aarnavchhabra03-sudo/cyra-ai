@@ -230,7 +230,7 @@ export async function POST(request: Request) {
       );
     }
 
-    // Track intervention event for closed-loop learning
+    // Track intervention event for closed-loop learning (linked to practice session ID)
     try {
       await startLearningIntervention({
         userId: user.id,
@@ -241,6 +241,7 @@ export async function POST(request: Request) {
         strategy: redirectedToPrerequisite ? 'prerequisite_repair' : 'targeted_practice',
         triggerReason: redirectedToPrerequisite ? 'BLOCKING_PREREQUISITE' : 'DEMONSTRATED_WEAKNESS',
         masteryBefore,
+        sourcePracticeSessionId: sessionRecord.id,
       });
     } catch (intErr) {
       console.warn('[PRACTICE GENERATE] Error starting intervention tracking:', intErr);

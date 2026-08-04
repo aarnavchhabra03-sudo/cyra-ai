@@ -34,6 +34,8 @@ export interface LearningInterventionRecord {
   score?: number | null;
   effectivenessScore?: number | null;
   successful?: boolean | null;
+  sourcePracticeSessionId?: string | null;
+  sourceQuizAttemptId?: string | null;
   startedAt: string;
   completedAt?: string | null;
 }
@@ -106,7 +108,7 @@ export function evaluateInterventionOutcome({
 }
 
 /**
- * Starts tracking a new learning intervention.
+ * Starts tracking a new learning intervention with optional deterministic source IDs.
  */
 export async function startLearningIntervention({
   userId,
@@ -117,6 +119,8 @@ export async function startLearningIntervention({
   strategy,
   triggerReason,
   masteryBefore,
+  sourcePracticeSessionId,
+  sourceQuizAttemptId,
 }: {
   userId: string;
   learningPathId?: string | null;
@@ -126,10 +130,27 @@ export async function startLearningIntervention({
   strategy?: string | null;
   triggerReason?: string | null;
   masteryBefore: number;
+  sourcePracticeSessionId?: string | null;
+  sourceQuizAttemptId?: string | null;
 }): Promise<string | null> {
   if (!userId || !concept || !interventionType) return null;
 
   try {
+    // DUPLICATE CHECK: If intervention already exists for this practice session, reuse it
+    if (sourcePracticeSessionId) {
+      const { data: existing } = await adminClient
+        .from('learning_interventions')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('source_practice_session_id', sourcePracticeSessionId)
+        .maybeSingle();
+
+      if (existing) {
+        console.log(`[INTERVENTION] PRACTICE SESSION LINKED (EXISTS): id=${existing.id}, session=${sourcePracticeSessionId}`);
+        return existing.id;
+      }
+    }
+
     const { data, error } = await adminClient
       .from('learning_interventions')
       .insert({
@@ -141,34 +162,42 @@ export async function startLearningIntervention({
         strategy: strategy || null,
         trigger_reason: triggerReason || null,
         mastery_before: Math.max(0, Math.min(100, masteryBefore)),
+        source_practice_session_id: sourcePracticeSessionId || null,
+        source_quiz_attempt_id: sourceQuizAttemptId || null,
         started_at: new Date().toISOString(),
       })
       .select('id')
       .single();
 
     if (error || !data) {
-      console.warn('[INTERVENTION TRACKING] Error inserting intervention:', error);
+      console.warn('[INTERVENTION] Error inserting intervention:', error);
       return null;
     }
 
+    console.log(`[INTERVENTION] STARTED: id=${data.id}, concept="${concept}", practiceSessionId=${sourcePracticeSessionId || 'none'}`);
     return data.id;
   } catch (err) {
-    console.error('[INTERVENTION TRACKING] Exception starting intervention:', err);
+    console.error('[INTERVENTION] Exception starting intervention:', err);
     return null;
   }
 }
 
 /**
  * Completes a tracked learning intervention with verified post-intervention evidence.
+ * Supports deterministic source lookup as primary matching logic.
  */
 export async function completeLearningIntervention({
   interventionId,
+  sourcePracticeSessionId,
+  sourceQuizAttemptId,
   userId,
   concept,
   masteryAfter,
   score,
 }: {
   interventionId?: string | null;
+  sourcePracticeSessionId?: string | null;
+  sourceQuizAttemptId?: string | null;
   userId: string;
   concept: string;
   masteryAfter: number;
@@ -176,41 +205,83 @@ export async function completeLearningIntervention({
 }): Promise<boolean> {
   if (!userId || !concept) return false;
 
-  try {
-    let targetId = interventionId;
+  console.log(`[INTERVENTION] EVIDENCE RECEIVED: concept="${concept}", practiceSessionId=${sourcePracticeSessionId || 'none'}, masteryAfter=${masteryAfter}, score=${score ?? 'none'}`);
 
-    if (!targetId) {
-      // Find recent open intervention matching concept
+  try {
+    let targetRecord: { id: string; mastery_before: number; concept: string } | null = null;
+
+    // 1. Primary Lookup: Deterministic source_practice_session_id match
+    if (sourcePracticeSessionId) {
+      const { data: recBySession } = await adminClient
+        .from('learning_interventions')
+        .select('id, mastery_before, concept')
+        .eq('user_id', userId)
+        .eq('source_practice_session_id', sourcePracticeSessionId)
+        .maybeSingle();
+
+      if (recBySession) {
+        targetRecord = recBySession;
+        console.log(`[INTERVENTION] MATCHED VIA SESSION ID: interventionId=${recBySession.id}, concept="${recBySession.concept}"`);
+      }
+    }
+
+    // 2. Secondary Lookup: Deterministic source_quiz_attempt_id match
+    if (!targetRecord && sourceQuizAttemptId) {
+      const { data: recByQuiz } = await adminClient
+        .from('learning_interventions')
+        .select('id, mastery_before, concept')
+        .eq('user_id', userId)
+        .eq('source_quiz_attempt_id', sourceQuizAttemptId)
+        .maybeSingle();
+
+      if (recByQuiz) {
+        targetRecord = recByQuiz;
+        console.log(`[INTERVENTION] MATCHED VIA QUIZ ATTEMPT ID: interventionId=${recByQuiz.id}`);
+      }
+    }
+
+    // 3. Tertiary Lookup: Direct interventionId match
+    if (!targetRecord && interventionId) {
+      const { data: recById } = await adminClient
+        .from('learning_interventions')
+        .select('id, mastery_before, concept')
+        .eq('id', interventionId)
+        .eq('user_id', userId)
+        .maybeSingle();
+
+      if (recById) {
+        targetRecord = recById;
+      }
+    }
+
+    // 4. Fallback: Safe temporal concept matching within 60 minutes
+    if (!targetRecord) {
       const cutoff = new Date(Date.now() - 60 * 60 * 1000).toISOString();
       const { data: openInterventions } = await adminClient
         .from('learning_interventions')
-        .select('id, mastery_before')
+        .select('id, mastery_before, concept')
         .eq('user_id', userId)
         .is('completed_at', null)
         .gte('started_at', cutoff)
         .order('started_at', { ascending: false });
 
+      const normC = normalizeGraphConcept(concept);
       const matching = (openInterventions || []).find(
-        (i: any) => normalizeGraphConcept(i.concept || '') === normalizeGraphConcept(concept)
+        (i: any) => normalizeGraphConcept(i.concept || '') === normC
       );
 
       if (matching) {
-        targetId = matching.id;
+        targetRecord = matching;
+        console.log(`[INTERVENTION] MATCHED VIA TEMPORAL FALLBACK: interventionId=${matching.id}`);
       }
     }
 
-    if (!targetId) return false;
+    if (!targetRecord) {
+      console.warn(`[INTERVENTION] ATTRIBUTION FAILED: user=${userId}, concept="${concept}", practiceSessionId=${sourcePracticeSessionId || 'none'}`);
+      return false;
+    }
 
-    // Load intervention record for masteryBefore
-    const { data: record, error: getErr } = await adminClient
-      .from('learning_interventions')
-      .select('mastery_before')
-      .eq('id', targetId)
-      .single();
-
-    if (getErr || !record) return false;
-
-    const masteryBefore = record.mastery_before || 0;
+    const masteryBefore = targetRecord.mastery_before || 0;
     const outcome = evaluateInterventionOutcome({
       masteryBefore,
       masteryAfter,
@@ -230,25 +301,24 @@ export async function completeLearningIntervention({
         completed_at: nowIso,
         updated_at: nowIso,
       })
-      .eq('id', targetId);
+      .eq('id', targetRecord.id);
 
     if (updateErr) {
-      console.warn('[INTERVENTION TRACKING] Error completing intervention:', updateErr);
+      console.warn('[INTERVENTION] Error completing intervention:', updateErr);
       return false;
     }
 
-    console.log(`[INTERVENTION TRACKING] Completed intervention ${targetId}: gain = +${outcome.masteryDelta}%, score = ${outcome.effectivenessScore}`);
+    console.log(`[INTERVENTION] COMPLETED: id=${targetRecord.id}, concept="${targetRecord.concept}", masteryBefore=${masteryBefore}, masteryAfter=${masteryAfter}, delta=+${outcome.masteryDelta}%, score=${score ?? 'none'}, effectivenessScore=${outcome.effectivenessScore}`);
     return true;
   } catch (err) {
-    console.error('[INTERVENTION TRACKING] Exception completing intervention:', err);
+    console.error('[INTERVENTION] Exception completing intervention:', err);
     return false;
   }
 }
 
 /**
  * Conservative Causal Attribution:
- * Correlates fresh assessment evidence (quiz / practice submission) with recent open interventions.
- * Attributes mastery change ONLY if concept strictly matches within a 60-minute window.
+ * Correlates fresh assessment evidence (quiz / practice submission) with recent interventions.
  */
 export async function correlateAssessmentEvidence({
   userId,
@@ -256,12 +326,16 @@ export async function correlateAssessmentEvidence({
   lessonId,
   newMasteryScore,
   score,
+  sourcePracticeSessionId,
+  sourceQuizAttemptId,
 }: {
   userId: string;
   concept: string;
   lessonId?: string | null;
   newMasteryScore: number;
   score?: number | null;
+  sourcePracticeSessionId?: string | null;
+  sourceQuizAttemptId?: string | null;
 }): Promise<void> {
   if (!userId || !concept) return;
 
@@ -271,9 +345,11 @@ export async function correlateAssessmentEvidence({
       concept,
       masteryAfter: newMasteryScore,
       score,
+      sourcePracticeSessionId,
+      sourceQuizAttemptId,
     });
   } catch (err) {
-    console.warn('[INTERVENTION TRACKING] Error correlating evidence:', err);
+    console.warn('[INTERVENTION] Error correlating evidence:', err);
   }
 }
 
@@ -295,19 +371,12 @@ export async function getInterventionEffectiveness(
   if (!userId) return defaultReport;
 
   try {
-    let query = adminClient
+    const { data: rows, error } = await adminClient
       .from('learning_interventions')
       .select('*')
       .eq('user_id', userId)
       .not('completed_at', 'is', null)
       .order('completed_at', { ascending: false });
-
-    if (concept) {
-      const normC = normalizeGraphConcept(concept);
-      // We will filter in-memory for concept normalization match
-    }
-
-    const { data: rows, error } = await query;
 
     if (error || !rows || rows.length === 0) {
       return defaultReport;
@@ -382,7 +451,7 @@ export async function getInterventionEffectiveness(
       recentOutcomes,
     };
   } catch (err) {
-    console.error('[INTERVENTION TRACKING] Error fetching effectiveness:', err);
+    console.error('[INTERVENTION] Error fetching effectiveness:', err);
     return defaultReport;
   }
 }
@@ -420,7 +489,6 @@ export async function detectInterventionStagnation(
     const avgGain = totalGain / recentTwo.length;
     const avgScore = recentTwo.reduce((sum, r) => sum + (r.effectiveness_score || 50), 0) / recentTwo.length;
 
-    // Stagnant if >= 2 attempts resulting in average gain < 5 or avg effectiveness < 40
     const stagnant = avgGain < 5 || avgScore < 40;
 
     return {
@@ -429,7 +497,7 @@ export async function detectInterventionStagnation(
       averageGain: Math.round(avgGain),
     };
   } catch (err) {
-    console.warn('[INTERVENTION TRACKING] Error checking stagnation:', err);
+    console.warn('[INTERVENTION] Error checking stagnation:', err);
     return { stagnant: false, recentAttempts: 0, averageGain: 0 };
   }
 }

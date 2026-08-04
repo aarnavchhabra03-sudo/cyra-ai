@@ -246,7 +246,7 @@ export async function POST(request: Request) {
       })
       .eq('id', sessionId);
 
-    // Correlate evidence for this practice session intervention
+    // Correlate evidence for this practice session intervention (deterministic source matching)
     try {
       await correlateAssessmentEvidence({
         userId: user.id,
@@ -254,6 +254,7 @@ export async function POST(request: Request) {
         lessonId: sessionRecord.lesson_id,
         newMasteryScore: masteryAfter,
         score: summary.percentage,
+        sourcePracticeSessionId: sessionId,
       });
     } catch (cErr) {
       console.warn('[PRACTICE SUBMIT] Evidence correlation warning:', cErr);
