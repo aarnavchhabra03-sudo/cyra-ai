@@ -292,6 +292,7 @@ export async function buildTutorContext({
 
     // 6. FETCH RELEVANT PERSISTENT TUTOR MEMORIES
     try {
+      const target = resolvePrimaryTargetConcept(context);
       const allConcepts = [
         ...(context.keyConcepts || []),
         ...context.weakConcepts.map((c) => c.concept),
@@ -299,6 +300,7 @@ export async function buildTutorContext({
       ];
       context.tutorMemories = await getRelevantTutorMemories({
         userId,
+        targetConcept: target.concept,
         conceptList: allConcepts,
         lessonId,
       });

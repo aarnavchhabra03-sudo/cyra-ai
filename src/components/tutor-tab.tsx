@@ -45,6 +45,14 @@ export interface LearnerContextSummary {
     confidence: number;
     occurrenceCount: number;
     resolvedAt?: string | null;
+    relevance?: string;
+    reliabilityScore?: number;
+  }>;
+  memoryIntelligence?: Array<{
+    concept: string;
+    type: string;
+    relevance: string;
+    reliabilityScore: number;
   }>;
   teachingStrategy?: string;
   targetConcept?: string;
@@ -329,16 +337,22 @@ export default function TutorTab({ lessonId, initialContext }: TutorTabProps) {
                 </span>
               </div>
               <div className="flex flex-wrap gap-1.5 pt-0.5">
-                {learnerContext.tutorMemories.slice(0, 3).map((mem, idx) => (
-                  <span
-                    key={mem.id || idx}
-                    className="text-[9px] font-mono px-2 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-zinc-300 flex items-center gap-1"
-                    title={mem.content}
-                  >
-                    <span className="text-indigo-400 font-semibold uppercase">{mem.memoryType.replace('_', ' ')}:</span>
-                    <span className="text-zinc-200">{mem.concept}</span>
-                  </span>
-                ))}
+                {learnerContext.tutorMemories.slice(0, 3).map((mem, idx) => {
+                  const isWarning = mem.memoryType === 'misconception' || mem.memoryType === 'recurring_weakness' || mem.memoryType === 'unresolved_gap';
+                  return (
+                    <span
+                      key={mem.id || idx}
+                      className="text-[9px] font-mono px-2 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-zinc-300 flex items-center gap-1"
+                      title={mem.content}
+                    >
+                      <span className={isWarning ? 'text-amber-400' : 'text-emerald-400'}>
+                        {isWarning ? '⚠️' : '✓'}
+                      </span>
+                      <span className="text-zinc-200 font-semibold">{mem.concept}</span>
+                      <span className="text-zinc-400 text-[8px]">({mem.memoryType.replace('_', ' ')})</span>
+                    </span>
+                  );
+                })}
               </div>
             </div>
           )}

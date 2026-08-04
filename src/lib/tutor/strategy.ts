@@ -1,4 +1,5 @@
 import { TutorContext, resolvePrimaryTargetConcept } from './context';
+import { normalizeConceptName } from './memory';
 
 export type TeachingStrategy =
   | 'foundation'
@@ -23,7 +24,7 @@ export interface TutorTeachingPlan {
 
 /**
  * Deterministic Teaching Strategy Engine for CYRA AI Tutor.
- * Combines base concept mastery, active learner memories, explicit user request/mode, and assessment security.
+ * Evaluates memory relevance and reliability scores (0-100) to prevent cross-concept memory leakage.
  */
 export function selectTeachingStrategy(
   context: TutorContext,
@@ -33,6 +34,7 @@ export function selectTeachingStrategy(
   const target = resolvePrimaryTargetConcept(context);
   const masteryScore = target.masteryScore;
   const conceptName = target.concept;
+  const normTargetConcept = normalizeConceptName(conceptName);
   const rationaleCodes: string[] = [];
 
   // Default values
@@ -66,34 +68,46 @@ export function selectTeachingStrategy(
     rationaleCodes.push('HIGH_MASTERY');
   }
 
-  // 2. MEMORY OVERRIDES (Evidence Thresholds: 60-79 = Moderate, >=80 = Strong)
+  // 2. MEMORY OVERRIDES (Using Relevance & Reliability Scores)
+  // Strict check: Memories must be active AND relevant to the target concept (not irrelevant)
   const activeMemories = (context.tutorMemories || []).filter(
-    (m) => !m.resolvedAt && (m.concept.toLowerCase() === conceptName.toLowerCase() || m.concept === 'General')
+    (m) => !m.resolvedAt && m.relevance !== 'irrelevant'
   );
 
   for (const mem of activeMemories) {
-    const confidence = mem.confidence || 50;
+    const reliability = mem.reliabilityScore || 0;
+    const relevance = mem.relevance || 'irrelevant';
 
-    // ACTIVE MISCONCEPTION OVERRIDE
-    if (mem.memoryType === 'misconception' && confidence >= 60) {
+    // Ignore memories with reliability < 50
+    if (reliability < 50 || relevance === 'irrelevant') {
+      continue;
+    }
+
+    // ACTIVE MISCONCEPTION OVERRIDE (Requires exact or related concept match & reliability >= 65)
+    if (mem.memoryType === 'misconception' && (relevance === 'exact' || relevance === 'related') && reliability >= 65) {
       addressMisconception = true;
       misconceptionContent = mem.content;
       if (!rationaleCodes.includes('ACTIVE_MISCONCEPTION')) {
         rationaleCodes.push('ACTIVE_MISCONCEPTION');
       }
-      if (confidence >= 80 && (strategy === 'application' || strategy === 'challenge')) {
+      if (reliability >= 85 && (strategy === 'application' || strategy === 'challenge')) {
         strategy = 'step_by_step';
         explanationDepth = 'basic';
       }
     }
 
-    // ANALOGY PREFERENCE OVERRIDE
-    if (mem.memoryType === 'learning_preference' && /analogy|analogies/i.test(mem.content) && confidence >= 60) {
+    // ANALOGY PREFERENCE OVERRIDE (Applies for general pedagogical preferences or exact/related match)
+    if (
+      mem.memoryType === 'learning_preference' &&
+      /analogy|analogies/i.test(mem.content) &&
+      (relevance === 'general' || relevance === 'exact' || relevance === 'related') &&
+      reliability >= 50
+    ) {
       useAnalogy = true;
       if (!rationaleCodes.includes('ANALOGY_PREFERENCE')) {
         rationaleCodes.push('ANALOGY_PREFERENCE');
       }
-      if (confidence >= 80 && (strategy === 'foundation' || strategy === 'guided_reasoning')) {
+      if (reliability >= 85 && (strategy === 'foundation' || strategy === 'guided_reasoning')) {
         strategy = 'analogy';
       }
     }
@@ -102,7 +116,7 @@ export function selectTeachingStrategy(
     if (
       (mem.memoryType === 'successful_explanation' || mem.memoryType === 'learning_preference') &&
       /step/i.test(mem.content) &&
-      confidence >= 60
+      reliability >= 65
     ) {
       if (!rationaleCodes.includes('STEP_BY_STEP_SUCCESS')) {
         rationaleCodes.push('STEP_BY_STEP_SUCCESS');
@@ -113,18 +127,22 @@ export function selectTeachingStrategy(
     }
 
     // RECURRING WEAKNESS / UNRESOLVED GAP OVERRIDE
-    if ((mem.memoryType === 'recurring_weakness' || mem.memoryType === 'unresolved_gap') && confidence >= 60) {
+    if (
+      (mem.memoryType === 'recurring_weakness' || mem.memoryType === 'unresolved_gap') &&
+      (relevance === 'exact' || relevance === 'related') &&
+      reliability >= 65
+    ) {
       askComprehensionCheck = true;
       if (!rationaleCodes.includes('RECURRING_WEAKNESS')) {
         rationaleCodes.push('RECURRING_WEAKNESS');
       }
-      if (confidence >= 80) {
+      if (reliability >= 85) {
         explanationDepth = 'basic';
       }
     }
 
     // RECENT IMPROVEMENT OVERRIDE
-    if (mem.memoryType === 'improvement') {
+    if (mem.memoryType === 'improvement' && (relevance === 'exact' || relevance === 'related') && reliability >= 65) {
       if (!rationaleCodes.includes('RECENT_IMPROVEMENT')) {
         rationaleCodes.push('RECENT_IMPROVEMENT');
       }
