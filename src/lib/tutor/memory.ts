@@ -1,5 +1,6 @@
 import { adminClient } from '@/lib/supabase/admin';
 import { getAIProvider } from '@/lib/ai/provider';
+import { getLearningPathConcepts } from '@/lib/adaptive/knowledge-graph';
 
 export type MemoryType =
   | 'misconception'
@@ -146,21 +147,40 @@ export function calculateReliabilityScore({
 /**
  * Automatically marks weaknesses/misconceptions as resolved when concept mastery reaches >= 85% with concept matching.
  */
-export async function autoResolveMasteredMemories(userId: string): Promise<void> {
+export async function autoResolveMasteredMemories(
+  userId: string,
+  learningPathId?: string | null
+): Promise<void> {
   try {
-    const { data: masteredRows } = await adminClient
+    let masteryQuery = adminClient
       .from('user_concept_mastery')
       .select('concept')
       .eq('user_id', userId)
       .gte('mastery_score', 85);
 
+    if (learningPathId) {
+      masteryQuery = masteryQuery.eq('learning_path_id', learningPathId);
+    } else {
+      masteryQuery = masteryQuery.is('learning_path_id', null);
+    }
+
+    const { data: masteredRows } = await masteryQuery;
+
     if (masteredRows && masteredRows.length > 0) {
-      const { data: activeMemories } = await adminClient
+      let activeMemQuery = adminClient
         .from('ai_tutor_memories')
         .select('id, concept')
         .eq('user_id', userId)
         .is('resolved_at', null)
         .in('memory_type', ['misconception', 'recurring_weakness', 'unresolved_gap']);
+
+      if (learningPathId) {
+        activeMemQuery = activeMemQuery.eq('learning_path_id', learningPathId);
+      } else {
+        activeMemQuery = activeMemQuery.is('learning_path_id', null);
+      }
+
+      const { data: activeMemories } = await activeMemQuery;
 
       if (activeMemories && activeMemories.length > 0) {
         const idsToResolve: string[] = [];
@@ -202,28 +222,41 @@ export async function getRelevantTutorMemories({
   targetConcept,
   conceptList = [],
   lessonId,
+  learningPathId,
 }: {
   userId: string;
   targetConcept: string;
   conceptList?: string[];
   lessonId?: string | null;
+  learningPathId?: string | null;
 }): Promise<TutorMemoryItem[]> {
   try {
     // 1. Auto-resolve memories for concepts that have reached >= 85% mastery
-    await autoResolveMasteredMemories(userId);
+    await autoResolveMasteredMemories(userId, learningPathId);
 
     // 2. Fetch active (unresolved) memories for user
-    const { data: rawMemories, error } = await adminClient
+    let memQuery = adminClient
       .from('ai_tutor_memories')
       .select('*')
       .eq('user_id', userId)
-      .is('resolved_at', null)
+      .is('resolved_at', null);
+
+    if (learningPathId) {
+      memQuery = memQuery.eq('learning_path_id', learningPathId);
+    } else {
+      memQuery = memQuery.is('learning_path_id', null);
+    }
+
+    const { data: rawMemories, error } = await memQuery
       .order('last_observed_at', { ascending: false })
-      .limit(30);
+      .limit(100);
 
     if (error || !rawMemories || rawMemories.length === 0) {
       return [];
     }
+
+    // Resolve course concepts for isolation
+    const lpConcepts = learningPathId ? await getLearningPathConcepts(learningPathId) : null;
 
     // 3. Classify relevance and compute reliability scores
     const evaluated: TutorMemoryItem[] = [];
@@ -240,6 +273,16 @@ export async function getRelevantTutorMemories({
       // Filter out irrelevant cross-concept memory leakage
       if (relevance === 'irrelevant') {
         continue;
+      }
+
+      // Course isolation leak prevention check
+      if (lpConcepts && m.concept && m.concept !== 'General' && m.memory_type !== 'learning_preference') {
+        const hasConcept = Array.from(lpConcepts).some(
+          (c) => normalizeConceptName(c) === normalizeConceptName(m.concept)
+        );
+        if (!hasConcept) {
+          continue; // Leak prevention: skip memory belonging to another course
+        }
       }
 
       const reliabilityScore = calculateReliabilityScore({
@@ -393,18 +436,60 @@ export async function persistTutorMemories({
 }): Promise<void> {
   if (!memories || memories.length === 0) return;
 
+  // Resolve learningPathId
+  let learningPathId: string | null = null;
+  if (lessonId) {
+    const { data: lessonRec } = await adminClient
+      .from('lessons')
+      .select('modules!inner(learning_path_id)')
+      .eq('id', lessonId)
+      .maybeSingle();
+    if (lessonRec) {
+      learningPathId = (lessonRec as any).modules?.learning_path_id || null;
+    }
+  }
+
+  if (conversationId && !learningPathId) {
+    const { data: convRec } = await adminClient
+      .from('ai_tutor_conversations')
+      .select('learning_path_id, lesson_id')
+      .eq('id', conversationId)
+      .maybeSingle();
+    if (convRec) {
+      learningPathId = convRec.learning_path_id;
+      if (!learningPathId && convRec.lesson_id) {
+        const { data: lessonRec } = await adminClient
+          .from('lessons')
+          .select('modules!inner(learning_path_id)')
+          .eq('id', convRec.lesson_id)
+          .maybeSingle();
+        if (lessonRec) {
+          learningPathId = (lessonRec as any).modules?.learning_path_id || null;
+        }
+      }
+    }
+  }
+
   for (const item of memories) {
     try {
       const normConcept = normalizeConceptName(item.concept);
 
       // CONTRADICTION HANDLING: If new memory is an improvement, resolve past active misconceptions/weaknesses on this concept
       if (item.memoryType === 'improvement' || item.memoryType === 'successful_explanation') {
-        const { data: contradictoryMemories } = await adminClient
+        let contradictionQuery = adminClient
           .from('ai_tutor_memories')
           .select('id, concept')
           .eq('user_id', userId)
           .is('resolved_at', null)
           .in('memory_type', ['misconception', 'recurring_weakness', 'unresolved_gap']);
+
+        if (learningPathId) {
+          contradictionQuery = contradictionQuery.eq('learning_path_id', learningPathId);
+        } else {
+          contradictionQuery = contradictionQuery.is('learning_path_id', null);
+        }
+
+        const { data: contradictoryMemories } = await contradictionQuery;
 
         if (contradictoryMemories && contradictoryMemories.length > 0) {
           const idsToResolve = contradictoryMemories
@@ -425,15 +510,22 @@ export async function persistTutorMemories({
         }
       }
 
-      // Look up existing memory for (userId, concept, memoryType)
-      const { data: existing } = await adminClient
+      // Look up existing memory for (userId, concept, memoryType, learningPathId)
+      let query = adminClient
         .from('ai_tutor_memories')
         .select('*')
         .eq('user_id', userId)
         .eq('concept', item.concept)
         .eq('memory_type', item.memoryType)
-        .is('resolved_at', null)
-        .maybeSingle();
+        .is('resolved_at', null);
+
+      if (learningPathId) {
+        query = query.eq('learning_path_id', learningPathId);
+      } else {
+        query = query.is('learning_path_id', null);
+      }
+
+      const { data: existing } = await query.maybeSingle();
 
       const now = new Date().toISOString();
 
@@ -459,6 +551,7 @@ export async function persistTutorMemories({
         // NEW MEMORY INSERTION
         await adminClient.from('ai_tutor_memories').insert({
           user_id: userId,
+          learning_path_id: learningPathId,
           concept: item.concept,
           memory_type: item.memoryType,
           content: item.content.slice(0, 200),

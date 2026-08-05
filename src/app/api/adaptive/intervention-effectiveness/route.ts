@@ -21,8 +21,9 @@ export async function GET(request: Request) {
     const user = authData.user;
     const { searchParams } = new URL(request.url);
     const concept = searchParams.get('concept');
+    const learningPathId = searchParams.get('learningPathId');
 
-    const report = await getInterventionEffectiveness(user.id, concept);
+    const report = await getInterventionEffectiveness(user.id, concept, learningPathId);
 
     return NextResponse.json({
       success: true,

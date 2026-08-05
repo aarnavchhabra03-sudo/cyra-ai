@@ -122,7 +122,8 @@ export async function POST(request: Request) {
     const { data: allMasteryRows } = await adminClient
       .from('user_concept_mastery')
       .select('concept, mastery_score')
-      .eq('user_id', user.id);
+      .eq('user_id', user.id)
+      .eq('learning_path_id', parentPath.id);
 
     const masteryMap = new Map<string, number>();
     if (allMasteryRows) {
@@ -131,7 +132,7 @@ export async function POST(request: Request) {
       }
     }
 
-    const relationships = await getUserConceptRelationships(user.id);
+    const relationships = await getUserConceptRelationships(user.id, parentPath.id);
 
     // 5. EVALUATE PREREQUISITE READINESS & BLOCKED STATUS
     const readiness = calculateConceptReadiness({

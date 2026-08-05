@@ -288,11 +288,24 @@ export async function POST(request: Request) {
       recommendations: [],
     };
 
+    let learningPathId: string | null = null;
+    if (quizRecord.lesson_id) {
+      const { data: lessonRec } = await adminClient
+        .from('lessons')
+        .select('modules!inner(learning_path_id)')
+        .eq('id', quizRecord.lesson_id)
+        .maybeSingle();
+      if (lessonRec) {
+        learningPathId = (lessonRec as any).modules?.learning_path_id || null;
+      }
+    }
+
     try {
       learningInsights = await updateUserConceptMastery(
         user.id,
         summary.results,
-        hasPassedPreviously
+        hasPassedPreviously,
+        learningPathId
       );
     } catch (masteryErr) {
       console.error('[QUIZ SUBMIT] Mastery calculation error (attempt preserved):', masteryErr);
@@ -307,6 +320,7 @@ export async function POST(request: Request) {
         userId: user.id,
         concept: targetC,
         lessonId: quizRecord.lesson_id,
+        learningPathId,
         newMasteryScore: newMastery,
         score: summary.percentage,
       });

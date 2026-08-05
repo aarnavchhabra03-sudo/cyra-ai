@@ -214,21 +214,39 @@ export async function POST(request: Request) {
 
     // 6. UPDATE CONCEPT MASTERY USING STAGE 12.4 ENGINE
     const masteryBefore = sessionRecord.mastery_before || 0;
+    let learningPathId: string | null = null;
+    if (sessionRecord.lesson_id) {
+      const { data: lessonRec } = await adminClient
+        .from('lessons')
+        .select('modules!inner(learning_path_id)')
+        .eq('id', sessionRecord.lesson_id)
+        .maybeSingle();
+      if (lessonRec) {
+        learningPathId = (lessonRec as any).modules?.learning_path_id || null;
+      }
+    }
     
     try {
-      await updateUserConceptMastery(user.id, summary.results, false);
+      await updateUserConceptMastery(user.id, summary.results, false, learningPathId);
       console.log('[PRACTICE SUBMIT] mastery updated');
     } catch (mErr) {
       console.error('[PRACTICE SUBMIT] Mastery calculation error (attempt preserved):', mErr);
     }
 
     // Fetch new mastery score after update
-    const { data: updatedMasteryRow } = await adminClient
+    let masteryQuery = adminClient
       .from('user_concept_mastery')
       .select('mastery_score')
       .eq('user_id', user.id)
-      .eq('concept', sessionRecord.concept)
-      .maybeSingle();
+      .eq('concept', sessionRecord.concept);
+
+    if (learningPathId) {
+      masteryQuery = masteryQuery.eq('learning_path_id', learningPathId);
+    } else {
+      masteryQuery = masteryQuery.is('learning_path_id', null);
+    }
+
+    const { data: updatedMasteryRow } = await masteryQuery.maybeSingle();
 
     const masteryAfter = updatedMasteryRow?.mastery_score ?? masteryBefore;
     const masteryChange = masteryAfter - masteryBefore;
@@ -252,6 +270,7 @@ export async function POST(request: Request) {
         userId: user.id,
         concept: sessionRecord.concept,
         lessonId: sessionRecord.lesson_id,
+        learningPathId,
         newMasteryScore: masteryAfter,
         score: summary.percentage,
         sourcePracticeSessionId: sessionId,

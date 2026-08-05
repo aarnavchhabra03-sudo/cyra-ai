@@ -165,6 +165,11 @@ export default function CourseWorkspace() {
         });
 
         setUiModules(mappedUiModules);
+        if (mappedUiModules.length > 0 && mappedUiModules[0].nodes.length > 0) {
+          const firstInProgress = mappedUiModules[0].nodes.find(n => n.status === 'in_progress');
+          const defaultNodeId = firstInProgress ? firstInProgress.id : mappedUiModules[0].nodes[0].id;
+          setActiveNodeId(prev => prev || defaultNodeId);
+        }
       } catch (err) {
         console.error('Error fetching workspace:', err);
         setError('Failed to load course workspace.');
@@ -336,7 +341,7 @@ export default function CourseWorkspace() {
             onCompleteQuiz={(pct, xp) => { if (pct >= 60) setProgress(p => Math.min(100, p + 15)); }}
           />
         )}
-        {activeTab === 'tutor' && <TutorTab initialContext={tutorCtx} />}
+        {activeTab === 'tutor' && <TutorTab learningPathId={learningPathId} lessonId={activeNodeId || undefined} initialContext={tutorCtx} />}
       </div>
     </div>
   );

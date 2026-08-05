@@ -5,6 +5,8 @@ import {
   detectRootKnowledgeGaps,
   normalizeGraphConcept,
   buildLearnerKnowledgeGraph,
+  getLearningPathConcepts,
+  getLearningPathLessons,
 } from './knowledge-graph';
 import { generateAdaptiveLearningPlan } from './learning-plan';
 import { generateAdaptiveRecommendations, ConceptMasteryRecordInput } from './recommendations';
@@ -71,6 +73,7 @@ export interface LearnerStateSnapshot {
   curriculumProgress: number;
   graphAvailable: boolean;
   hasActiveAssessment: boolean;
+  learningPathConcepts?: string[];
 }
 
 /**
@@ -103,12 +106,28 @@ export async function buildLearnerStateSnapshot({
   };
 
   try {
-    // 1. Load Concept Mastery
-    const { data: masteryRows } = await adminClient
+    // 1. Fetch current path concepts and lessons list
+    let lpConcepts: Set<string> | null = null;
+    let lpLessons: string[] | null = null;
+    if (learningPathId) {
+      lpConcepts = await getLearningPathConcepts(learningPathId);
+      snapshot.learningPathConcepts = Array.from(lpConcepts);
+      lpLessons = await getLearningPathLessons(learningPathId);
+    }
+
+    // 2. Load Concept Mastery
+    let masteryQuery = adminClient
       .from('user_concept_mastery')
       .select('*')
       .eq('user_id', userId);
 
+    if (learningPathId) {
+      masteryQuery = masteryQuery.eq('learning_path_id', learningPathId);
+    } else {
+      masteryQuery = masteryQuery.is('learning_path_id', null);
+    }
+
+    const { data: masteryRows } = await masteryQuery;
     const masteryMap = new Map<string, number>();
 
     if (masteryRows && masteryRows.length > 0) {
@@ -125,12 +144,12 @@ export async function buildLearnerStateSnapshot({
       });
     }
 
-    // 2. Load Relationships & Knowledge Graph
-    const relationships = await getUserConceptRelationships(userId);
+    // 3. Load Relationships & Knowledge Graph (course-isolated)
+    const relationships = await getUserConceptRelationships(userId, learningPathId);
     snapshot.graphAvailable = Array.isArray(relationships) && relationships.length > 0;
 
     if (snapshot.graphAvailable) {
-      const graphData = await buildLearnerKnowledgeGraph(userId);
+      const graphData = await buildLearnerKnowledgeGraph(userId, learningPathId);
       snapshot.rootGaps = graphData.rootGaps.map((rg) => ({
         concept: rg.concept,
         rootGapScore: rg.rootGapScore,
@@ -146,7 +165,7 @@ export async function buildLearnerStateSnapshot({
       }));
     }
 
-    // 3. Load Recommendations & Learning Plan
+    // 4. Load Recommendations & Learning Plan
     const recordsInput: ConceptMasteryRecordInput[] = snapshot.mastery.map((m) => ({
       concept: m.concept,
       mastery_score: m.masteryScore,
@@ -163,11 +182,21 @@ export async function buildLearnerStateSnapshot({
     const planResult = await generateAdaptiveLearningPlan({ userId, learningPathId });
     snapshot.adaptivePlan = planResult.nextTargets;
 
-    // 4. Load Recent Quiz Attempts
-    const { data: quizAtts } = await adminClient
+    // 5. Load Recent Quiz Attempts (course-isolated)
+    let quizAttsQuery = adminClient
       .from('quiz_attempts')
       .select('quiz_id, lesson_id, percentage, completed_at')
-      .eq('user_id', userId)
+      .eq('user_id', userId);
+
+    if (learningPathId && lpLessons) {
+      if (lpLessons.length > 0) {
+        quizAttsQuery = quizAttsQuery.in('lesson_id', lpLessons);
+      } else {
+        quizAttsQuery = quizAttsQuery.eq('lesson_id', '00000000-0000-0000-0000-000000000000');
+      }
+    }
+
+    const { data: quizAtts } = await quizAttsQuery
       .order('completed_at', { ascending: false })
       .limit(5);
 
@@ -180,8 +209,8 @@ export async function buildLearnerStateSnapshot({
       }));
     }
 
-    // 5. Load Recent Practice Attempts
-    const { data: practiceAtts } = await adminClient
+    // 6. Load Recent Practice Attempts (course-isolated)
+    let practiceAttsQuery = adminClient
       .from('adaptive_practice_attempts')
       .select(`
         percentage,
@@ -189,10 +218,21 @@ export async function buildLearnerStateSnapshot({
         mastery_after,
         completed_at,
         adaptive_practice_sessions!inner (
-          concept
+          concept,
+          lesson_id
         )
       `)
-      .eq('user_id', userId)
+      .eq('user_id', userId);
+
+    if (learningPathId && lpLessons) {
+      if (lpLessons.length > 0) {
+        practiceAttsQuery = practiceAttsQuery.in('adaptive_practice_sessions.lesson_id', lpLessons);
+      } else {
+        practiceAttsQuery = practiceAttsQuery.eq('adaptive_practice_sessions.lesson_id', '00000000-0000-0000-0000-000000000000');
+      }
+    }
+
+    const { data: practiceAtts } = await practiceAttsQuery
       .order('completed_at', { ascending: false })
       .limit(5);
 
@@ -206,14 +246,15 @@ export async function buildLearnerStateSnapshot({
       }));
     }
 
-    // 6. Check Active Assessment Status
+    // 7. Check Active Assessment Status
     snapshot.hasActiveAssessment = await checkAndCleanupActiveAssessment(userId);
 
-    // 7. Load Tutor Memories
+    // 8. Load Tutor Memories
     snapshot.tutorMemories = await getRelevantTutorMemories({
       userId,
       targetConcept: snapshot.mastery[0]?.concept || 'General Concept',
       conceptList: snapshot.mastery.map((m) => m.concept),
+      learningPathId: learningPathId || null,
     });
   } catch (err) {
     console.error('[ORCHESTRATOR] Error building learner state snapshot:', err);
@@ -227,6 +268,39 @@ export async function buildLearnerStateSnapshot({
  * Evaluates learner state snapshot signals and outputs the authoritative Next Best Action.
  */
 export function determineNextBestAction(snapshot: LearnerStateSnapshot): NextBestAction {
+  const nextAction = determineNextBestActionRaw(snapshot);
+
+  if (snapshot.learningPathId && nextAction.concept && snapshot.learningPathConcepts) {
+    const conceptBelongsToPath = snapshot.learningPathConcepts
+      .map(c => normalizeGraphConcept(c))
+      .includes(normalizeGraphConcept(nextAction.concept));
+
+    console.log(`[ADAPTIVE_SCOPE] learningPathId=${snapshot.learningPathId}`);
+    console.log(`[ADAPTIVE_SCOPE] candidateConcept=${nextAction.concept}`);
+    console.log(`[ADAPTIVE_SCOPE] conceptBelongsToPath=${conceptBelongsToPath}`);
+
+    if (!conceptBelongsToPath) {
+      console.warn(`[ADAPTIVE_SCOPE] REJECTED course-specific recommendation due to leakage: "${nextAction.concept}" for path: ${snapshot.learningPathId}`);
+      // Fallback to current lesson or a safe curriculum step
+      return {
+        action: 'continue_lesson',
+        concept: snapshot.currentLessonTitle || null,
+        lessonId: snapshot.currentLessonId || null,
+        priorityScore: 60,
+        reasonCode: 'NEXT_CURRICULUM_STEP',
+        reason: `Proceed with your next curriculum lesson.`,
+        secondaryActions: [
+          { action: 'revisit_notes', concept: snapshot.currentLessonTitle || null, reason: `Review current lesson study notes.` },
+          { action: 'ask_tutor', concept: snapshot.currentLessonTitle || null, reason: `Ask CYRA Tutor any questions about this lesson.` },
+        ],
+      };
+    }
+  }
+
+  return nextAction;
+}
+
+export function determineNextBestActionRaw(snapshot: LearnerStateSnapshot): NextBestAction {
   // Precedence Level 0: ACTIVE ASSESSMENT SECURITY SHIELD
   if (snapshot.hasActiveAssessment) {
     return {

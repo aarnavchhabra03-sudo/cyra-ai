@@ -177,10 +177,22 @@ export async function POST(request: Request) {
         );
       }
 
+      if (aiResponse.code === 'VALIDATION_ERROR') {
+        console.error('[GENERATE RESOURCE PLAN] Validation failed during AI response generation:', aiResponse.error);
+        return NextResponse.json(
+          {
+            success: false,
+            error: "CYRA couldn't generate a valid resource pack. Please try again.",
+            code: 'VALIDATION_ERROR',
+          },
+          { status: 422 }
+        );
+      }
+
       return NextResponse.json(
         {
           success: false,
-          error: aiResponse.error || 'Failed to generate resource plan requirements from AI provider.',
+          error: 'Failed to generate resource plan requirements from AI provider.',
           code: 'AI_GENERATION_FAILED',
         },
         { status: 500 }
@@ -196,22 +208,24 @@ export async function POST(request: Request) {
     let rawCandidateCount = 0;
 
     for (const item of aiPlanItems) {
-      // Enrich search query with subject context
-      const targetedQuery = `${lessonContext.courseTitle} ${lessonContext.lessonTitle} ${item.title} ${item.resource_type}`.trim();
+      // Use the AI-generated search_query if available, otherwise construct the fallback
+      const queryToUse = (item.search_query && typeof item.search_query === 'string' && item.search_query.trim().length > 0)
+        ? item.search_query.trim()
+        : `${lessonContext.courseTitle} ${lessonContext.lessonTitle} ${item.title} ${item.resource_type}`.trim();
+
       totalSearches++;
 
-      const tavilyResults = await searchTavily(targetedQuery, 5);
+      const tavilyResults = await searchTavily(queryToUse, 5);
       rawCandidateCount += tavilyResults.length;
 
       for (const candidate of tavilyResults) {
         const evaluation = evaluateCandidate(candidate, lessonContext, item);
 
         console.log(`[CYRA RESOURCE ENGINE CANDIDATE EVALUATION]:
-        - Query:      "${targetedQuery}"
+        - Query:      "${queryToUse}"
         - Candidate:  "${candidate.title}" (${candidate.url})
         - Score:      ${evaluation.score}/100 (Threshold: ${MIN_RESOURCE_RELEVANCE_SCORE})
-        - Passed:     ${evaluation.passed ? 'YES ✅' : 'NO ❌'}
-        - Reasons:    ${evaluation.reasons.join(' | ')}`);
+        - Passed:     ${evaluation.passed ? 'YES ✅' : 'NO ❌'}`);
 
         if (evaluation.passed) {
           candidatePool.push(evaluation);

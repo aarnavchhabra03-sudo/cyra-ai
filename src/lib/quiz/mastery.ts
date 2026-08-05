@@ -49,7 +49,8 @@ export function getConceptRecommendation(concept: string, level: MasteryLevel): 
 export async function updateUserConceptMastery(
   userId: string,
   gradedResults: GradedQuestionResult[],
-  isDuplicateSubmission: boolean = false
+  isDuplicateSubmission: boolean = false,
+  learningPathId?: string | null
 ): Promise<LearningInsights> {
   // 1. Group quiz results by question concept
   const conceptGroups = new Map<string, {
@@ -86,13 +87,20 @@ export async function updateUserConceptMastery(
       ? (stats.pointsEarned / stats.pointsPossible) * 100
       : 0;
 
-    // Fetch existing historical record for (user_id, concept)
-    const { data: existingRecord } = await adminClient
+    // Fetch existing historical record for (user_id, concept, learningPathId)
+    let query = adminClient
       .from('user_concept_mastery')
       .select('*')
       .eq('user_id', userId)
-      .eq('concept', concept)
-      .maybeSingle();
+      .eq('concept', concept);
+
+    if (learningPathId) {
+      query = query.eq('learning_path_id', learningPathId);
+    } else {
+      query = query.is('learning_path_id', null);
+    }
+
+    const { data: existingRecord } = await query.maybeSingle();
 
     let newScore: number;
     let newAttemptCount: number;
@@ -133,21 +141,24 @@ export async function updateUserConceptMastery(
     const level = getMasteryLevel(newScore);
 
     // Upsert into user_concept_mastery via adminClient
+    const upsertPayload: any = {
+      user_id: userId,
+      learning_path_id: learningPathId || null,
+      concept: concept,
+      mastery_score: newScore,
+      questions_attempted: newAttemptedTotal,
+      questions_correct: newCorrectTotal,
+      total_points_possible: newPointsPossible,
+      total_points_earned: newPointsEarned,
+      attempt_count: newAttemptCount,
+      last_result: level,
+      last_practiced_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+
     const { error: upsertErr } = await adminClient
       .from('user_concept_mastery')
-      .upsert({
-        user_id: userId,
-        concept: concept,
-        mastery_score: newScore,
-        questions_attempted: newAttemptedTotal,
-        questions_correct: newCorrectTotal,
-        total_points_possible: newPointsPossible,
-        total_points_earned: newPointsEarned,
-        attempt_count: newAttemptCount,
-        last_result: level,
-        last_practiced_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      }, { onConflict: 'user_id, concept' });
+      .upsert(upsertPayload, { onConflict: 'user_id, concept, learning_path_id' });
 
     if (upsertErr) {
       console.error(`[MASTERY ENGINE] Error updating concept "${concept}" for user ${userId}:`, upsertErr);

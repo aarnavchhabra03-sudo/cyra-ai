@@ -5,6 +5,7 @@ import {
   detectRootKnowledgeGaps,
   normalizeGraphConcept,
   buildLearnerKnowledgeGraph,
+  getLearningPathConcepts,
 } from './knowledge-graph';
 import { ConceptMasteryRecordInput } from './recommendations';
 
@@ -43,10 +44,18 @@ export async function generateAdaptiveLearningPlan({
 
   try {
     // 1. Fetch user concept mastery records
-    const { data: masteryRows } = await adminClient
+    let query = adminClient
       .from('user_concept_mastery')
       .select('*')
       .eq('user_id', userId);
+
+    if (learningPathId) {
+      query = query.eq('learning_path_id', learningPathId);
+    } else {
+      query = query.is('learning_path_id', null);
+    }
+
+    const { data: masteryRows } = await query;
 
     const masteryMap = new Map<string, number>();
     const recordsMap = new Map<string, ConceptMasteryRecordInput>();
@@ -68,7 +77,7 @@ export async function generateAdaptiveLearningPlan({
     }
 
     // 2. Load concept relationships & knowledge graph data
-    const relationships = await getUserConceptRelationships(userId);
+    const relationships = await getUserConceptRelationships(userId, learningPathId);
     const rootGaps = detectRootKnowledgeGaps({ masteryMap, relationships });
     const rootGapScoreMap = new Map<string, { score: number; count: number }>();
 
@@ -200,7 +209,7 @@ export async function generateAdaptiveLearningPlan({
       rank: idx + 1,
     }));
 
-    const graphData = await buildLearnerKnowledgeGraph(userId);
+    const graphData = await buildLearnerKnowledgeGraph(userId, learningPathId);
 
     return {
       nextTargets,

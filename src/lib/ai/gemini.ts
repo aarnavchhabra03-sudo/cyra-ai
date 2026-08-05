@@ -12,8 +12,22 @@ import {
   GenerateQuizOptions,
   AIQuizResponse
 } from './types';
-import { validateLearningPath, LearningPathGeneration, validateStudyNotesObject } from '@/types/ai';
-import { validateResourcePlan, validateQuizData } from './groq';
+import {
+  validateLearningPath,
+  LearningPathGeneration,
+  validateStudyNotesObject,
+  validateResourcePlanObject,
+  validateQuizDataObject,
+  ResourcePlanSchema,
+  normalizeResourcePlanOutput,
+  LearningPathGenerationSchema,
+  normalizeLearningPathOutput,
+  StudyNotesSchema,
+  normalizeStudyNotesOutput,
+  GeneratedQuizSchema,
+  normalizeQuizOutput
+} from '@/types/ai';
+import { validateQuizData } from './groq';
 
 export const GEMINI_MODEL = 'gemini-2.0-flash-lite';
 
@@ -145,15 +159,72 @@ You MUST respond strictly with a valid JSON object matching this exact schema st
         };
       }
 
-      const parsed = JSON.parse(rawText.replace(/```json|```/g, '').trim());
-      const validated = validateLearningPath(parsed);
+      let parsed: any;
+      try {
+        parsed = JSON.parse(rawText.replace(/```json|```/g, '').trim());
+      } catch (err) {
+        console.error('Failed to parse Learning Path JSON:', rawText);
+        return {
+          success: false,
+          provider: 'gemini',
+          model: GEMINI_MODEL,
+          error: 'AI returned malformed non-JSON output.',
+          code: 'INVALID_JSON',
+        };
+      }
 
-      return {
-        success: true,
-        data: validated,
-        provider: 'gemini',
-        model: GEMINI_MODEL,
-      };
+      // First validation attempt
+      const normalized = normalizeLearningPathOutput(parsed);
+      const firstParseResult = LearningPathGenerationSchema.safeParse(normalized);
+
+      let finalParsed = parsed;
+
+      if (!firstParseResult.success) {
+        console.warn('[GEMINI LEARNING PATH] First validation failed. Running repair retry...', firstParseResult.error.message);
+        
+        // Repair Prompt
+        const repairPrompt = `The previous JSON response did not satisfy the LearningPath schema.
+Validation errors:
+${JSON.stringify(firstParseResult.error.format(), null, 2)}
+
+Original invalid JSON output:
+${JSON.stringify(parsed, null, 2)}
+
+Repair this JSON to satisfy the LearningPath schema.
+Do not change valid semantic content.
+Return JSON only.`;
+
+        try {
+          const repairResponse = await ai.models.generateContent({
+            model: GEMINI_MODEL,
+            contents: repairPrompt,
+          });
+          const repairRawText = repairResponse.text?.trim();
+          if (repairRawText) {
+            finalParsed = JSON.parse(repairRawText.replace(/```json|```/g, '').trim());
+          }
+        } catch (repairErr: any) {
+          console.error('[GEMINI LEARNING PATH] Repair attempt failed:', repairErr.message);
+        }
+      }
+
+      try {
+        const validated = validateLearningPath(finalParsed);
+        return {
+          success: true,
+          data: validated,
+          provider: 'gemini',
+          model: GEMINI_MODEL,
+        };
+      } catch (error: any) {
+        return {
+          success: false,
+          provider: 'gemini',
+          model: GEMINI_MODEL,
+          error: error?.message || 'Gemini learning path validation failed.',
+          code: 'VALIDATION_ERROR',
+        };
+      }
     } catch (error: any) {
       return {
         success: false,
@@ -222,8 +293,43 @@ You MUST respond strictly with a valid JSON object matching this exact schema:
         };
       }
 
+      // First validation attempt
+      const normalized = normalizeStudyNotesOutput(parsed);
+      const firstParseResult = StudyNotesSchema.safeParse(normalized);
+
+      let finalParsed = parsed;
+
+      if (!firstParseResult.success) {
+        console.warn('[GEMINI STUDY NOTES] First validation failed. Running repair retry...', firstParseResult.error.message);
+        
+        // Repair Prompt
+        const repairPrompt = `The previous JSON response did not satisfy the StudyNotes schema.
+Validation errors:
+${JSON.stringify(firstParseResult.error.format(), null, 2)}
+
+Original invalid JSON output:
+${JSON.stringify(parsed, null, 2)}
+
+Repair this JSON to satisfy the StudyNotes schema.
+Do not change valid semantic content.
+Return JSON only.`;
+
+        try {
+          const repairResponse = await ai.models.generateContent({
+            model: GEMINI_MODEL,
+            contents: repairPrompt,
+          });
+          const repairRawText = repairResponse.text?.trim();
+          if (repairRawText) {
+            finalParsed = JSON.parse(repairRawText.replace(/```json|```/g, '').trim());
+          }
+        } catch (repairErr: any) {
+          console.error('[GEMINI STUDY NOTES] Repair attempt failed:', repairErr.message);
+        }
+      }
+
       try {
-        const validatedNotes = validateStudyNotesObject(parsed);
+        const validatedNotes = validateStudyNotesObject(finalParsed);
         return {
           success: true,
           data: validatedNotes,
@@ -236,7 +342,7 @@ You MUST respond strictly with a valid JSON object matching this exact schema:
           success: false,
           provider: 'gemini',
           model: GEMINI_MODEL,
-          error: `AI response failed study notes validation: ${validationErr.message || validationErr}`,
+          error: validationErr.message || 'AI response failed study notes validation.',
           code: 'VALIDATION_ERROR',
         };
       }
@@ -269,9 +375,38 @@ You MUST respond strictly with a valid JSON object matching this exact schema:
     try {
       const ai = new GoogleGenAI({ apiKey });
 
+      const userPrompt = `You are CYRA AI, an expert educational resource curator.
+Your mission is to generate a high-quality, balanced Resource Discovery Plan for:
+Course: "${options.courseTitle || 'General Course'}" (${options.experienceLevel || 'beginner'} level)
+Module: "${options.moduleTitle || 'General Module'}"
+Lesson Title: "${options.lessonTitle}"
+Lesson Description / Context: "${options.lessonDescription || options.lessonContent || 'Core fundamentals'}"
+
+You MUST respond strictly with a valid JSON object matching this exact schema:
+{
+  "resources": [
+    {
+      "title": "Clear, informative title for this external resource",
+      "resource_type": "article" | "documentation" | "textbook" | "video" | "practice" | "reference",
+      "source": "Expected site or organization source e.g. Khan Academy, MDN Web Docs, YouTube",
+      "description": "Engaging, thorough description of what the resource contains and why it helps",
+      "duration": "e.g. 10 mins, 45 mins, 2 hours",
+      "difficulty": "beginner" | "intermediate" | "advanced",
+      "is_recommended": true | false,
+      "search_query": "specific, topic-targeted search phrase used to discover this resource"
+    }
+  ]
+}
+
+CRITICAL REQUIREMENT:
+- Every resource object in the "resources" array MUST contain a "search_query" field.
+- The "search_query" must be a meaningful, topic-specific discovery phrase useful for web search APIs (e.g., "data communication components sender receiver channel tutorial" instead of just "tutorial" or matching the title exactly).
+- "search_query" must NOT be empty or null.
+- "is_recommended" should be true for the top 1-2 resources that are most critical.`;
+
       const response = await ai.models.generateContent({
         model: GEMINI_MODEL,
-        contents: `Generate structured resource discovery plan JSON for lesson "${options.lessonTitle}" in course "${options.courseTitle || ''}". Include JSON object with key "resources" containing array of objects with keys: title, resource_type, source, description, duration, difficulty, is_recommended, search_query.`,
+        contents: userPrompt,
       });
 
       const rawText = response.text?.trim();
@@ -285,23 +420,73 @@ You MUST respond strictly with a valid JSON object matching this exact schema:
         };
       }
 
-      const parsed = JSON.parse(rawText.replace(/```json|```/g, '').trim());
-      if (!validateResourcePlan(parsed)) {
+      let parsed: any;
+      try {
+        parsed = JSON.parse(rawText.replace(/```json|```/g, '').trim());
+      } catch (err) {
+        console.error('Failed to parse Resource Plan JSON:', rawText);
         return {
           success: false,
           provider: 'gemini',
           model: GEMINI_MODEL,
-          error: 'AI response failed resource plan validation.',
-          code: 'VALIDATION_ERROR',
+          error: 'AI returned malformed non-JSON output.',
+          code: 'INVALID_JSON',
         };
       }
 
-      return {
-        success: true,
-        data: parsed,
-        provider: 'gemini',
-        model: GEMINI_MODEL,
-      };
+      // First validation attempt
+      const normalized = normalizeResourcePlanOutput(parsed);
+      const firstParseResult = ResourcePlanSchema.safeParse(normalized);
+
+      let finalParsed = parsed;
+
+      if (!firstParseResult.success) {
+        console.warn('[GEMINI RESOURCE PLAN] First validation failed. Running repair retry...', firstParseResult.error.message);
+        
+        // Repair Prompt
+        const repairPrompt = `The previous JSON response did not satisfy the ResourcePlan schema.
+Validation errors:
+${JSON.stringify(firstParseResult.error.format(), null, 2)}
+
+Original invalid JSON output:
+${JSON.stringify(parsed, null, 2)}
+
+Repair this JSON to satisfy the ResourcePlan schema.
+Do not change valid semantic content.
+Populate every required search_query with a meaningful discovery query based on that resource.
+Return JSON only.`;
+
+        try {
+          const repairResponse = await ai.models.generateContent({
+            model: GEMINI_MODEL,
+            contents: repairPrompt,
+          });
+          const repairRawText = repairResponse.text?.trim();
+          if (repairRawText) {
+            finalParsed = JSON.parse(repairRawText.replace(/```json|```/g, '').trim());
+          }
+        } catch (repairErr: any) {
+          console.error('[GEMINI RESOURCE PLAN] Repair attempt failed:', repairErr.message);
+        }
+      }
+
+      try {
+        const validatedPlan = validateResourcePlanObject(finalParsed);
+        return {
+          success: true,
+          data: validatedPlan,
+          provider: 'gemini',
+          model: GEMINI_MODEL,
+        };
+      } catch (validationErr: any) {
+        return {
+          success: false,
+          provider: 'gemini',
+          model: GEMINI_MODEL,
+          error: validationErr.message || 'AI response failed resource plan validation.',
+          code: 'VALIDATION_ERROR',
+        };
+      }
     } catch (error: any) {
       return {
         success: false,
@@ -347,23 +532,72 @@ You MUST respond strictly with a valid JSON object matching this exact schema:
         };
       }
 
-      const parsed = JSON.parse(rawText.replace(/```json|```/g, '').trim());
-      if (!validateQuizData(parsed)) {
+      let parsed: any;
+      try {
+        parsed = JSON.parse(rawText.replace(/```json|```/g, '').trim());
+      } catch (err) {
+        console.error('Failed to parse Quiz JSON:', rawText);
         return {
           success: false,
           provider: 'gemini',
           model: GEMINI_MODEL,
-          error: 'AI response failed quiz validation.',
-          code: 'VALIDATION_ERROR',
+          error: 'AI returned malformed non-JSON output.',
+          code: 'INVALID_JSON',
         };
       }
 
-      return {
-        success: true,
-        data: parsed,
-        provider: 'gemini',
-        model: GEMINI_MODEL,
-      };
+      // First validation attempt
+      const normalized = normalizeQuizOutput(parsed);
+      const firstParseResult = GeneratedQuizSchema.safeParse(normalized);
+
+      let finalParsed = parsed;
+
+      if (!firstParseResult.success) {
+        console.warn('[GEMINI QUIZ] First validation failed. Running repair retry...', firstParseResult.error.message);
+        
+        // Repair Prompt
+        const repairPrompt = `The previous JSON response did not satisfy the Quiz schema.
+Validation errors:
+${JSON.stringify(firstParseResult.error.format(), null, 2)}
+
+Original invalid JSON output:
+${JSON.stringify(parsed, null, 2)}
+
+Repair this JSON to satisfy the Quiz schema.
+Do not change valid semantic content.
+Return JSON only.`;
+
+        try {
+          const repairResponse = await ai.models.generateContent({
+            model: GEMINI_MODEL,
+            contents: repairPrompt,
+          });
+          const repairRawText = repairResponse.text?.trim();
+          if (repairRawText) {
+            finalParsed = JSON.parse(repairRawText.replace(/```json|```/g, '').trim());
+          }
+        } catch (repairErr: any) {
+          console.error('[GEMINI QUIZ] Repair attempt failed:', repairErr.message);
+        }
+      }
+
+      try {
+        const validatedQuiz = validateQuizDataObject(finalParsed);
+        return {
+          success: true,
+          data: validatedQuiz,
+          provider: 'gemini',
+          model: GEMINI_MODEL,
+        };
+      } catch (validationErr: any) {
+        return {
+          success: false,
+          provider: 'gemini',
+          model: GEMINI_MODEL,
+          error: validationErr.message || 'AI response failed quiz validation.',
+          code: 'VALIDATION_ERROR',
+        };
+      }
     } catch (error: any) {
       return {
         success: false,

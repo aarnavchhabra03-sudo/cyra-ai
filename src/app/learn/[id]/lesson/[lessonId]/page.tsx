@@ -427,7 +427,7 @@ export default function LessonPage() {
             <Sparkles className="w-4 h-4 text-indigo-400" />
             <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-300">Context-Aware AI Tutor</h3>
           </div>
-          <TutorTab lessonId={lessonId} />
+          <TutorTab learningPathId={learningPathId} lessonId={lessonId} />
         </div>
 
         {/* ── Lesson Navigation & Completion Footer ──────────────────── */}

@@ -180,10 +180,22 @@ export async function POST(request: Request) {
         );
       }
 
+      if (aiResponse.code === 'VALIDATION_ERROR') {
+        console.error('[GENERATE QUIZ] Validation failed during AI response generation:', aiResponse.error);
+        return NextResponse.json(
+          {
+            success: false,
+            error: "CYRA couldn't generate a valid quiz. Please try again.",
+            code: 'VALIDATION_ERROR',
+          },
+          { status: 422 }
+        );
+      }
+
       return NextResponse.json(
         {
           success: false,
-          error: aiResponse.error || 'Failed to generate quiz from AI provider.',
+          error: 'Failed to generate quiz from AI provider.',
           code: 'AI_GENERATION_FAILED',
         },
         { status: 500 }

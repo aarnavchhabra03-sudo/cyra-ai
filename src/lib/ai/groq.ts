@@ -15,7 +15,21 @@ import {
   AIQuizResponse,
   GeneratedQuizData
 } from './types';
-import { validateLearningPath, LearningPathGeneration, validateStudyNotesObject } from '@/types/ai';
+import {
+  validateLearningPath,
+  LearningPathGeneration,
+  validateStudyNotesObject,
+  validateResourcePlanObject,
+  validateQuizDataObject,
+  ResourcePlanSchema,
+  normalizeResourcePlanOutput,
+  LearningPathGenerationSchema,
+  normalizeLearningPathOutput,
+  StudyNotesSchema,
+  normalizeStudyNotesOutput,
+  GeneratedQuizSchema,
+  normalizeQuizOutput
+} from '@/types/ai';
 
 // Centralized Groq model definition
 export const GROQ_MODEL = 'llama-3.3-70b-versatile';
@@ -141,7 +155,30 @@ You MUST respond strictly with a valid JSON object matching this exact schema:
 `;
 
 const SYSTEM_RESOURCE_PLANNER_INSTRUCTION = `You are CYRA AI, an expert educational resource curator.
-Your mission is to generate a high-quality, balanced Resource Discovery Plan for a specific lesson topic.`;
+Your mission is to generate a high-quality, balanced Resource Discovery Plan for a specific lesson topic.
+
+You MUST respond strictly with a valid JSON object matching this exact schema (NO markdown codeblock wrappers like \`\`\`json):
+
+{
+  "resources": [
+    {
+      "title": "Clear, informative title for this external resource",
+      "resource_type": "article" | "documentation" | "textbook" | "video" | "practice" | "reference",
+      "source": "Expected site or organization source e.g. Khan Academy, MDN Web Docs, YouTube",
+      "description": "Engaging, thorough description of what the resource contains and why it helps",
+      "duration": "e.g. 10 mins, 45 mins, 2 hours",
+      "difficulty": "beginner" | "intermediate" | "advanced",
+      "is_recommended": true | false,
+      "search_query": "specific, topic-targeted search phrase used to discover this resource"
+    }
+  ]
+}
+
+CRITICAL REQUIREMENT:
+- Every resource object in the "resources" array MUST contain a "search_query" field.
+- The "search_query" must be a meaningful, topic-specific discovery phrase useful for web search APIs (e.g., "data communication components sender receiver channel tutorial" instead of just "tutorial" or matching the title exactly).
+- "search_query" must NOT be empty or null.
+- "is_recommended" should be true for the top 1-2 resources that are most critical.`;
 
 const SYSTEM_QUIZ_ARCHITECT_INSTRUCTION = `You are CYRA AI, an expert academic assessment designer.
 Your mission is to synthesize a high-quality, 5-to-8 question quiz strictly based on the lesson's core concepts, content, and learning goals.
@@ -332,8 +369,48 @@ Generate a complete, structured curriculum JSON matching the system schema stric
         };
       }
 
+      // First validation attempt
+      const normalized = normalizeLearningPathOutput(parsedJson);
+      const firstParseResult = LearningPathGenerationSchema.safeParse(normalized);
+
+      let finalParsed = parsedJson;
+
+      if (!firstParseResult.success) {
+        console.warn('[GROQ LEARNING PATH] First validation failed. Running repair retry...', firstParseResult.error.message);
+        
+        // Repair Prompt
+        const repairPrompt = `The previous JSON response did not satisfy the LearningPath schema.
+Validation errors:
+${JSON.stringify(firstParseResult.error.format(), null, 2)}
+
+Original invalid JSON output:
+${JSON.stringify(parsedJson, null, 2)}
+
+Repair this JSON to satisfy the LearningPath schema.
+Do not change valid semantic content.
+Return JSON only.`;
+
+        try {
+          const repairCompletion = await groq.chat.completions.create({
+            messages: [
+              { role: 'system', content: 'You are a JSON repair assistant.' },
+              { role: 'user', content: repairPrompt },
+            ],
+            model: GROQ_MODEL,
+            temperature: 0.2,
+            response_format: { type: 'json_object' },
+          });
+          const repairRaw = repairCompletion.choices[0]?.message?.content?.trim();
+          if (repairRaw) {
+            finalParsed = JSON.parse(repairRaw.replace(/```json|```/g, '').trim());
+          }
+        } catch (repairErr: any) {
+          console.error('[GROQ LEARNING PATH] Repair attempt failed:', repairErr.message);
+        }
+      }
+
       try {
-        const validatedPath: LearningPathGeneration = validateLearningPath(parsedJson);
+        const validatedPath: LearningPathGeneration = validateLearningPath(finalParsed);
 
         return {
           success: true,
@@ -347,7 +424,7 @@ Generate a complete, structured curriculum JSON matching the system schema stric
           success: false,
           provider: 'groq',
           model: GROQ_MODEL,
-          error: `AI output validation failed: ${validationErr.message}`,
+          error: validationErr.message || 'AI response failed learning path schema validation.',
           code: 'VALIDATION_ERROR',
         };
       }
@@ -442,8 +519,48 @@ Generate structured study notes strictly adhering to the JSON schema.`;
         };
       }
 
+      // First validation attempt
+      const normalized = normalizeStudyNotesOutput(parsedJson);
+      const firstParseResult = StudyNotesSchema.safeParse(normalized);
+
+      let finalParsed = parsedJson;
+
+      if (!firstParseResult.success) {
+        console.warn('[GROQ STUDY NOTES] First validation failed. Running repair retry...', firstParseResult.error.message);
+        
+        // Repair Prompt
+        const repairPrompt = `The previous JSON response did not satisfy the StudyNotes schema.
+Validation errors:
+${JSON.stringify(firstParseResult.error.format(), null, 2)}
+
+Original invalid JSON output:
+${JSON.stringify(parsedJson, null, 2)}
+
+Repair this JSON to satisfy the StudyNotes schema.
+Do not change valid semantic content.
+Return JSON only.`;
+
+        try {
+          const repairCompletion = await groq.chat.completions.create({
+            messages: [
+              { role: 'system', content: 'You are a JSON repair assistant.' },
+              { role: 'user', content: repairPrompt },
+            ],
+            model: GROQ_MODEL,
+            temperature: 0.2,
+            response_format: { type: 'json_object' },
+          });
+          const repairRaw = repairCompletion.choices[0]?.message?.content?.trim();
+          if (repairRaw) {
+            finalParsed = JSON.parse(repairRaw.replace(/```json|```/g, '').trim());
+          }
+        } catch (repairErr: any) {
+          console.error('[GROQ STUDY NOTES] Repair attempt failed:', repairErr.message);
+        }
+      }
+
       try {
-        const validatedNotes = validateStudyNotesObject(parsedJson);
+        const validatedNotes = validateStudyNotesObject(finalParsed);
         return {
           success: true,
           data: validatedNotes,
@@ -456,7 +573,7 @@ Generate structured study notes strictly adhering to the JSON schema.`;
           success: false,
           provider: 'groq',
           model: GROQ_MODEL,
-          error: `AI response failed study notes schema validation: ${validationErr.message || validationErr}`,
+          error: validationErr.message || 'AI response failed study notes schema validation.',
           code: 'VALIDATION_ERROR',
         };
       }
@@ -551,22 +668,64 @@ Generate a balanced list of 5 to 7 resources strictly matching the JSON schema.`
         };
       }
 
-      if (!validateResourcePlan(parsedJson)) {
+      // First validation attempt
+      const normalized = normalizeResourcePlanOutput(parsedJson);
+      const firstParseResult = ResourcePlanSchema.safeParse(normalized);
+
+      let finalParsed = parsedJson;
+
+      if (!firstParseResult.success) {
+        console.warn('[GROQ RESOURCE PLAN] First validation failed. Running repair retry...', firstParseResult.error.message);
+        
+        // Repair Prompt
+        const repairPrompt = `The previous JSON response did not satisfy the ResourcePlan schema.
+Validation errors:
+${JSON.stringify(firstParseResult.error.format(), null, 2)}
+
+Original invalid JSON output:
+${JSON.stringify(parsedJson, null, 2)}
+
+Repair this JSON to satisfy the ResourcePlan schema.
+Do not change valid semantic content.
+Populate every required search_query with a meaningful discovery query based on that resource.
+Return JSON only.`;
+
+        try {
+          const repairCompletion = await groq.chat.completions.create({
+            messages: [
+              { role: 'system', content: 'You are a JSON repair assistant.' },
+              { role: 'user', content: repairPrompt },
+            ],
+            model: GROQ_MODEL,
+            temperature: 0.2,
+            response_format: { type: 'json_object' },
+          });
+          const repairRaw = repairCompletion.choices[0]?.message?.content?.trim();
+          if (repairRaw) {
+            finalParsed = JSON.parse(repairRaw.replace(/```json|```/g, '').trim());
+          }
+        } catch (repairErr: any) {
+          console.error('[GROQ RESOURCE PLAN] Repair attempt failed:', repairErr.message);
+        }
+      }
+
+      try {
+        const validatedPlan = validateResourcePlanObject(finalParsed);
+        return {
+          success: true,
+          data: validatedPlan,
+          provider: 'groq',
+          model: GROQ_MODEL,
+        };
+      } catch (validationErr: any) {
         return {
           success: false,
           provider: 'groq',
           model: GROQ_MODEL,
-          error: 'AI response failed resource plan schema validation.',
+          error: validationErr.message || 'AI response failed resource plan schema validation.',
           code: 'VALIDATION_ERROR',
         };
       }
-
-      return {
-        success: true,
-        data: parsedJson,
-        provider: 'groq',
-        model: GROQ_MODEL,
-      };
     } catch (error: any) {
       const status = error?.status || error?.statusCode;
       if (status === 429) {
@@ -659,23 +818,63 @@ Generate a complete, structured Quiz JSON strictly adhering to the system schema
         };
       }
 
-      if (!validateQuizData(parsedJson)) {
-        console.error('[GROQ QUIZ] Validation failed for payload:', parsedJson);
+      // First validation attempt
+      const normalized = normalizeQuizOutput(parsedJson);
+      const firstParseResult = GeneratedQuizSchema.safeParse(normalized);
+
+      let finalParsed = parsedJson;
+
+      if (!firstParseResult.success) {
+        console.warn('[GROQ QUIZ] First validation failed. Running repair retry...', firstParseResult.error.message);
+        
+        // Repair Prompt
+        const repairPrompt = `The previous JSON response did not satisfy the Quiz schema.
+Validation errors:
+${JSON.stringify(firstParseResult.error.format(), null, 2)}
+
+Original invalid JSON output:
+${JSON.stringify(parsedJson, null, 2)}
+
+Repair this JSON to satisfy the Quiz schema.
+Do not change valid semantic content.
+Return JSON only.`;
+
+        try {
+          const repairCompletion = await groq.chat.completions.create({
+            messages: [
+              { role: 'system', content: 'You are a JSON repair assistant.' },
+              { role: 'user', content: repairPrompt },
+            ],
+            model: GROQ_MODEL,
+            temperature: 0.2,
+            response_format: { type: 'json_object' },
+          });
+          const repairRaw = repairCompletion.choices[0]?.message?.content?.trim();
+          if (repairRaw) {
+            finalParsed = JSON.parse(repairRaw.replace(/```json|```/g, '').trim());
+          }
+        } catch (repairErr: any) {
+          console.error('[GROQ QUIZ] Repair attempt failed:', repairErr.message);
+        }
+      }
+
+      try {
+        const validatedQuiz = validateQuizDataObject(finalParsed);
+        return {
+          success: true,
+          data: validatedQuiz,
+          provider: 'groq',
+          model: GROQ_MODEL,
+        };
+      } catch (validationErr: any) {
         return {
           success: false,
           provider: 'groq',
           model: GROQ_MODEL,
-          error: 'AI response failed quiz schema validation.',
+          error: validationErr.message || 'AI response failed quiz schema validation.',
           code: 'VALIDATION_ERROR',
         };
       }
-
-      return {
-        success: true,
-        data: parsedJson,
-        provider: 'groq',
-        model: GROQ_MODEL,
-      };
     } catch (error: any) {
       const status = error?.status || error?.statusCode;
       if (status === 429) {

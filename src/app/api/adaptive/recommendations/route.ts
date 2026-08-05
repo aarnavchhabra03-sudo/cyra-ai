@@ -2,9 +2,9 @@ import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { adminClient } from '@/lib/supabase/admin';
 import { generateAdaptiveRecommendations, ConceptMasteryRecordInput } from '@/lib/adaptive/recommendations';
-import { getUserConceptRelationships } from '@/lib/adaptive/knowledge-graph';
+import { getUserConceptRelationships, getLearningPathConcepts } from '@/lib/adaptive/knowledge-graph';
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
     // 1. Authenticate user session via Supabase server client
     const supabase = await createClient();
@@ -22,12 +22,45 @@ export async function GET() {
     }
 
     const user = authData.user;
+    const { searchParams } = new URL(request.url);
+    const learningPathId = searchParams.get('learningPathId');
+
+    // Fail closed if learningPathId is missing
+    if (!learningPathId) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'learningPathId query parameter is required.',
+          code: 'LEARNING_PATH_REQUIRED',
+        },
+        { status: 400 }
+      );
+    }
 
     // 2. Query ONLY authenticated user's rows from user_concept_mastery (enforced by RLS)
-    const { data: masteryRows, error: dbError } = await supabase
+    const lpConcepts = await getLearningPathConcepts(learningPathId);
+    if (lpConcepts.size === 0) {
+      return NextResponse.json({
+        success: true,
+        data: {
+          recommendations: [],
+          summary: {
+            totalConcepts: 0,
+            weakConcepts: 0,
+            developingConcepts: 0,
+            proficientConcepts: 0,
+            masteredConcepts: 0,
+          },
+        },
+      });
+    }
+
+    const query = supabase
       .from('user_concept_mastery')
       .select('*')
-      .order('mastery_score', { ascending: true });
+      .eq('learning_path_id', learningPathId);
+
+    const { data: masteryRows, error: dbError } = await query.order('mastery_score', { ascending: true });
 
     if (dbError) {
       console.error('[ADAPTIVE RECS] Database query error:', dbError);
@@ -166,7 +199,7 @@ export async function GET() {
     }
 
     // 4. Load concept relationships & run deterministic recommendation engine with knowledge graph
-    const relationships = await getUserConceptRelationships(user.id);
+    const relationships = await getUserConceptRelationships(user.id, learningPathId);
     const result = generateAdaptiveRecommendations(records, 5, relationships);
 
     return NextResponse.json({

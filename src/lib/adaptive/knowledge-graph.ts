@@ -54,6 +54,64 @@ export function normalizeGraphConcept(name: string): string {
 }
 
 /**
+ * Helper to fetch all unique lesson IDs belonging to a learning path.
+ */
+export async function getLearningPathLessons(learningPathId: string): Promise<string[]> {
+  if (!learningPathId) return [];
+  try {
+    const { data } = await adminClient
+      .from('lessons')
+      .select('id, modules!inner(learning_path_id)')
+      .eq('modules.learning_path_id', learningPathId);
+    return (data || []).map((r) => r.id);
+  } catch (err) {
+    console.error('[KNOWLEDGE GRAPH] Error in getLearningPathLessons:', err);
+    return [];
+  }
+}
+
+/**
+ * Helper to fetch all unique concepts (lesson titles and key concepts) belonging to a learning path.
+ */
+export async function getLearningPathConcepts(learningPathId: string): Promise<Set<string>> {
+  const concepts = new Set<string>();
+  if (!learningPathId) return concepts;
+  try {
+    const { data } = await adminClient
+      .from('lessons')
+      .select(`
+        title,
+        modules!inner (
+          learning_path_id
+        ),
+        study_notes (
+          key_concepts
+        )
+      `)
+      .eq('modules.learning_path_id', learningPathId);
+
+    if (data) {
+      for (const row of data as any[]) {
+        if (row.title) {
+          concepts.add(row.title.trim());
+        }
+        const notes = Array.isArray(row.study_notes) ? row.study_notes[0] : row.study_notes;
+        if (notes && Array.isArray(notes.key_concepts)) {
+          for (const kc of notes.key_concepts) {
+            if (kc && typeof kc === 'string') {
+              concepts.add(kc.trim());
+            }
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[KNOWLEDGE GRAPH] Error in getLearningPathConcepts:', err);
+  }
+  return concepts;
+}
+
+/**
  * Seeds default standard prerequisite relationships if no custom edges exist for user.
  */
 export async function seedDefaultKnowledgeGraph(userId: string): Promise<void> {
@@ -107,13 +165,28 @@ export async function seedDefaultKnowledgeGraph(userId: string): Promise<void> {
  * Loads concept relationships for a user.
  * Returns empty array if no graph edges exist yet for user.
  */
-export async function getUserConceptRelationships(userId: string): Promise<ConceptRelationship[]> {
+export async function getUserConceptRelationships(
+  userId: string,
+  learningPathId?: string | null
+): Promise<ConceptRelationship[]> {
   try {
-    const { data: rows, error } = await adminClient
+    let query = adminClient
       .from('concept_relationships')
       .select('*')
       .eq('user_id', userId);
 
+    if (learningPathId) {
+      const lpConcepts = await getLearningPathConcepts(learningPathId);
+      if (lpConcepts.size > 0) {
+        query = query
+          .in('source_concept', Array.from(lpConcepts))
+          .in('target_concept', Array.from(lpConcepts));
+      } else {
+        return [];
+      }
+    }
+
+    const { data: rows, error } = await query;
     if (error || !rows) return [];
 
     return rows.map((r) => ({
@@ -294,15 +367,26 @@ export function detectRootKnowledgeGaps({
 /**
  * Builds complete Learner Knowledge Graph data structure for a user.
  */
-export async function buildLearnerKnowledgeGraph(userId: string): Promise<KnowledgeGraphData> {
+export async function buildLearnerKnowledgeGraph(
+  userId: string,
+  learningPathId?: string | null
+): Promise<KnowledgeGraphData> {
   try {
-    const relationships = await getUserConceptRelationships(userId);
+    const relationships = await getUserConceptRelationships(userId, learningPathId);
 
     // Fetch user concept mastery
-    const { data: masteryRows } = await adminClient
+    let query = adminClient
       .from('user_concept_mastery')
       .select('concept, mastery_score')
       .eq('user_id', userId);
+
+    if (learningPathId) {
+      query = query.eq('learning_path_id', learningPathId);
+    } else {
+      query = query.is('learning_path_id', null);
+    }
+
+    const { data: masteryRows } = await query;
 
     const masteryMap = new Map<string, number>();
     const allConceptsSet = new Set<string>();

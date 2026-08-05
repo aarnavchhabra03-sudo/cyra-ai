@@ -61,11 +61,12 @@ export interface LearnerContextSummary {
 }
 
 interface TutorTabProps {
+  learningPathId?: string;
   lessonId?: string;
   initialContext?: string;
 }
 
-export default function TutorTab({ lessonId, initialContext }: TutorTabProps) {
+export default function TutorTab({ learningPathId, lessonId, initialContext }: TutorTabProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [isTyping, setIsTyping] = useState(false);
@@ -73,6 +74,7 @@ export default function TutorTab({ lessonId, initialContext }: TutorTabProps) {
   const [learnerContext, setLearnerContext] = useState<LearnerContextSummary | null>(null);
   const [showIntelligence, setShowIntelligence] = useState<boolean>(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [initFailed, setInitFailed] = useState<boolean>(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // Suggested quick prompts & modes
@@ -96,11 +98,16 @@ export default function TutorTab({ lessonId, initialContext }: TutorTabProps) {
   useEffect(() => {
     async function loadInitialTutorData() {
       try {
-        const query = lessonId ? `?lessonId=${encodeURIComponent(lessonId)}` : '';
+        const paramsList: string[] = [];
+        if (lessonId) paramsList.push(`lessonId=${encodeURIComponent(lessonId)}`);
+        if (learningPathId) paramsList.push(`learningPathId=${encodeURIComponent(learningPathId)}`);
+        const query = paramsList.length > 0 ? `?${paramsList.join('&')}` : '';
+
         const res = await fetch(`/api/ai/tutor${query}`);
         const result = await res.json();
 
         if (res.ok && result.success && result.data) {
+          setInitFailed(false);
           if (result.data.conversationId) {
             setConversationId(result.data.conversationId);
           }
@@ -122,10 +129,15 @@ export default function TutorTab({ lessonId, initialContext }: TutorTabProps) {
             const targetConcept = result.data.context?.primaryTargetConcept || result.data.context?.primaryWeakConcept;
             const score = result.data.context?.primaryWeakConceptScore ?? result.data.context?.masteryScore;
             const lTitle = result.data.context?.lessonTitle || 'this course';
+            const isLessonConcept = result.data.context?.primaryTargetLevel === 'lesson_concept';
 
             let welcomeText = `Hello! I am your **CYRA AI Tutor**. I'm here to help you study **${lTitle}**.`;
             if (targetConcept) {
-              welcomeText += `\n\nI noticed you currently have **${score ?? 0}% mastery** in **${targetConcept}**. Would you like me to explain this concept simply, offer an analogy, or review your weak areas?`;
+              if (isLessonConcept) {
+                welcomeText += `\n\nWe haven't built much mastery evidence for this topic yet, so we can start with the foundations, work through an example, or I can quiz you to establish a baseline.`;
+              } else {
+                welcomeText += `\n\nI noticed you currently have **${score ?? 0}% mastery** in **${targetConcept}**. Would you like me to explain this concept simply, offer an analogy, or review your weak areas?`;
+              }
             } else {
               welcomeText += `\n\nAsk me any question about the lesson, concepts, or practice problems to get started!`;
             }
@@ -139,9 +151,14 @@ export default function TutorTab({ lessonId, initialContext }: TutorTabProps) {
               },
             ]);
           }
+        } else {
+          setInitFailed(true);
+          setErrorMsg(result.error || 'Failed to initialize tutor conversation.');
         }
-      } catch (err) {
+      } catch (err: any) {
         console.error('[TUTOR TAB] Error loading initial tutor session:', err);
+        setInitFailed(true);
+        setErrorMsg('Failed to initialize tutor conversation. Network or server error.');
       }
     }
 
@@ -157,7 +174,7 @@ export default function TutorTab({ lessonId, initialContext }: TutorTabProps) {
 
   const handleSendMessage = async (textToSend: string, modeHint?: string) => {
     const trimmed = textToSend.trim();
-    if (!trimmed || isTyping) return;
+    if (!trimmed || isTyping || initFailed) return;
 
     setErrorMsg(null);
 
@@ -186,7 +203,7 @@ export default function TutorTab({ lessonId, initialContext }: TutorTabProps) {
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     };
 
-    setMessages(prev => [...prev, userMsg]);
+    const originalInput = inputValue;
     setInputValue('');
     setIsTyping(true);
 
@@ -195,6 +212,7 @@ export default function TutorTab({ lessonId, initialContext }: TutorTabProps) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          learningPathId,
           lessonId,
           conversationId,
           message: displayText,
@@ -207,6 +225,9 @@ export default function TutorTab({ lessonId, initialContext }: TutorTabProps) {
       if (!res.ok || !result.success || !result.data) {
         throw new Error(result.error || 'Failed to get tutor response.');
       }
+
+      // Append user message only after server successfully accepts it
+      setMessages(prev => [...prev, userMsg]);
 
       if (result.data.conversationId) {
         setConversationId(result.data.conversationId);
@@ -230,6 +251,7 @@ export default function TutorTab({ lessonId, initialContext }: TutorTabProps) {
     } catch (err: any) {
       console.error('[TUTOR TAB] Error sending message:', err);
       setErrorMsg(err.message || 'Tutor connection failed. Please try again.');
+      setInputValue(originalInput);
     } finally {
       setIsTyping(false);
     }
@@ -296,19 +318,19 @@ export default function TutorTab({ lessonId, initialContext }: TutorTabProps) {
           <div className="grid grid-cols-2 gap-2 text-[11px]">
             <div className="p-2 rounded bg-zinc-900/50 border border-zinc-850 space-y-0.5">
               <span className="text-[9px] font-mono text-amber-400 uppercase font-bold block">Needs Review:</span>
-              <p className="text-zinc-200 font-medium truncate">
-                {activeWeakConcept 
+              <p className="text-zinc-200 font-medium truncate" title={activeWeakConcept || undefined}>
+                {learnerContext.primaryTargetLevel !== 'lesson_concept' && activeWeakConcept 
                   ? `${activeWeakConcept} (${activeWeakScore ?? 0}%)` 
-                  : 'No critical weak concepts'}
+                  : 'No assessed weak areas yet'}
               </p>
             </div>
 
             <div className="p-2 rounded bg-zinc-900/50 border border-zinc-850 space-y-0.5">
               <span className="text-[9px] font-mono text-emerald-400 uppercase font-bold block">Strong Concepts:</span>
-              <p className="text-zinc-200 font-medium truncate">
+              <p className="text-zinc-200 font-medium truncate" title={learnerContext.masteredConcepts?.[0]?.concept || undefined}>
                 {learnerContext.masteredConcepts && learnerContext.masteredConcepts.length > 0
                   ? `${learnerContext.masteredConcepts[0].concept} (${learnerContext.masteredConcepts[0].masteryScore}%)`
-                  : 'Building mastery baseline...'}
+                  : 'No demonstrated strengths yet'}
               </p>
             </div>
           </div>
@@ -434,13 +456,14 @@ export default function TutorTab({ lessonId, initialContext }: TutorTabProps) {
       </div>
 
       {/* 4. SUGGESTED TEACHING MODES & QUICK ACTION PILLS */}
-      {!isTyping && (
+      {!isTyping && !initFailed && (
         <div className="px-4 py-2 border-t border-zinc-900 bg-zinc-950/40 flex gap-2 overflow-x-auto select-none scrollbar-none whitespace-nowrap">
           {suggestedPrompts.map((p) => (
             <button
               key={p.label}
+              disabled={initFailed}
               onClick={() => handleSendMessage(p.label, p.mode)}
-              className="text-[10px] px-3 py-1 rounded-full bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white border border-zinc-800 transition-colors inline-flex items-center gap-1"
+              className="text-[10px] px-3 py-1 rounded-full bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white border border-zinc-800 transition-colors inline-flex items-center gap-1 disabled:opacity-50 disabled:pointer-events-none"
             >
               <Zap className="w-3 h-3 text-cyan-400" />
               {p.label}
@@ -453,15 +476,16 @@ export default function TutorTab({ lessonId, initialContext }: TutorTabProps) {
       <form onSubmit={handleFormSubmit} className="p-3 bg-zinc-950/60 border-t border-zinc-900 flex items-center gap-2">
         <textarea 
           rows={1}
-          placeholder="Ask CYRA AI tutor a question about this course..." 
+          disabled={initFailed || isTyping}
+          placeholder={initFailed ? "Tutor initialization failed. Inputs disabled." : "Ask CYRA AI tutor a question about this course..."}
           value={inputValue}
           onChange={(e) => setInputValue(e.target.value)}
           onKeyDown={handleKeyDown}
-          className="flex-1 bg-zinc-900/80 border border-zinc-800 rounded-xl px-4 py-2.5 text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-indigo-500/60 resize-none"
+          className="flex-1 bg-zinc-900/80 border border-zinc-800 rounded-xl px-4 py-2.5 text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-indigo-500/60 resize-none disabled:opacity-50 disabled:cursor-not-allowed"
         />
         <button 
           type="submit"
-          disabled={!inputValue.trim() || isTyping}
+          disabled={!inputValue.trim() || isTyping || initFailed}
           className="p-2.5 rounded-xl bg-gradient-to-r from-indigo-500 to-cyan-500 hover:from-indigo-600 hover:to-cyan-600 text-white disabled:opacity-50 disabled:pointer-events-none transition-colors shadow-md flex-shrink-0"
         >
           <Send className="w-4 h-4" />

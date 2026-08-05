@@ -33,27 +33,107 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const lessonId = searchParams.get('lessonId');
     const conversationId = searchParams.get('conversationId');
+    let learningPathId = searchParams.get('learningPathId');
 
-    // Validate ownership if lessonId is supplied
-    if (lessonId) {
+    const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+    if (learningPathId && !UUID_REGEX.test(learningPathId)) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'Invalid course context ID format.',
+          code: 'INVALID_PARAMETER_FORMAT',
+        },
+        { status: 400 }
+      );
+    }
+
+    if (lessonId && !UUID_REGEX.test(lessonId)) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'Invalid lesson context ID format.',
+          code: 'INVALID_PARAMETER_FORMAT',
+        },
+        { status: 400 }
+      );
+    }
+
+    if (conversationId && !UUID_REGEX.test(conversationId)) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'Invalid conversation ID format.',
+          code: 'INVALID_PARAMETER_FORMAT',
+        },
+        { status: 400 }
+      );
+    }
+
+    // Resolve learningPathId from lessonId if missing
+    if (lessonId && !learningPathId) {
       const { data: lessonRecord } = await adminClient
         .from('lessons')
-        .select('modules!inner(learning_paths!inner(user_id))')
+        .select('modules!inner(learning_path_id)')
+        .eq('id', lessonId)
+        .maybeSingle();
+      if (lessonRecord) {
+        learningPathId = (lessonRecord as any).modules?.learning_path_id || null;
+      }
+    }
+
+    // Fail closed if learningPathId is missing
+    if (!learningPathId) {
+      console.warn('[TUTOR GET] Missing learningPathId. Failing closed.');
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'Course context (learningPathId) is required.',
+          code: 'LEARNING_PATH_REQUIRED',
+        },
+        { status: 400 }
+      );
+    }
+
+    // Validate ownership: Verify lessonId belongs to learningPathId
+    if (lessonId && learningPathId) {
+      const { data: lessonRecord } = await adminClient
+        .from('lessons')
+        .select('modules!inner(learning_path_id)')
         .eq('id', lessonId)
         .maybeSingle();
 
-      const ownerId = (lessonRecord as any)?.modules?.learning_paths?.user_id;
-      if (ownerId && ownerId !== user.id) {
-        console.warn('[TUTOR] Unauthorized lesson context access');
+      const lessonPathId = (lessonRecord as any)?.modules?.learning_path_id;
+      if (!lessonPathId || lessonPathId !== learningPathId) {
+        console.warn('[TUTOR GET] Mismatched lesson and path identifiers!');
         return NextResponse.json(
           {
             success: false,
-            error: 'You are not authorized to view tutor context for this lesson.',
-            code: 'UNAUTHORIZED',
+            error: 'The specified lesson does not belong to the active course.',
+            code: 'INVALID_LESSON_COURSE_MATCH',
           },
-          { status: 403 }
+          { status: 400 }
         );
       }
+    }
+
+    // Validate ownership of learning path
+    const { data: pathRecord } = await adminClient
+      .from('learning_paths')
+      .select('id, user_id')
+      .eq('id', learningPathId)
+      .maybeSingle();
+
+    if (!pathRecord || pathRecord.user_id !== user.id) {
+      console.warn('[TUTOR GET] Unauthorized path context access');
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'You are not authorized to view tutor context for this course.',
+          code: 'UNAUTHORIZED',
+        },
+        { status: 403 }
+      );
     }
 
     // Load or find active conversation
@@ -63,7 +143,7 @@ export async function GET(request: Request) {
     if (targetConvId) {
       const { data: existingConv } = await adminClient
         .from('ai_tutor_conversations')
-        .select('id, user_id, lesson_id')
+        .select('id, user_id, lesson_id, learning_path_id')
         .eq('id', targetConvId)
         .maybeSingle();
 
@@ -77,15 +157,36 @@ export async function GET(request: Request) {
           { status: 403 }
         );
       }
+
+      if (existingConv.learning_path_id !== learningPathId) {
+        console.warn(`[TUTOR GET] Cross-course access attempt blocked: conversation.learning_path_id=${existingConv.learning_path_id}, requested.learningPathId=${learningPathId}`);
+        return NextResponse.json(
+          {
+            success: false,
+            error: 'The requested conversation does not belong to the active course.',
+            code: 'CROSS_COURSE_ACCESS_DENIED',
+          },
+          { status: 400 }
+        );
+      }
+
       if (existingConv.lesson_id) {
         resolvedLessonId = existingConv.lesson_id;
       }
-    } else if (lessonId) {
-      const { data: existingConv } = await adminClient
+    } else {
+      let convQuery = adminClient
         .from('ai_tutor_conversations')
         .select('id')
         .eq('user_id', user.id)
-        .eq('lesson_id', lessonId)
+        .eq('learning_path_id', learningPathId);
+
+      if (lessonId) {
+        convQuery = convQuery.eq('lesson_id', lessonId);
+      } else {
+        convQuery = convQuery.is('lesson_id', null);
+      }
+
+      const { data: existingConv } = await convQuery
         .order('updated_at', { ascending: false })
         .maybeSingle();
 
@@ -106,7 +207,7 @@ export async function GET(request: Request) {
     }
 
     // Build tutor context & select teaching strategy
-    const context = await buildTutorContext({ userId: user.id, lessonId: resolvedLessonId });
+    const context = await buildTutorContext({ userId: user.id, learningPathId, lessonId: resolvedLessonId });
     const target = resolvePrimaryTargetConcept(context);
     const plan = selectTeachingStrategy(context, '', undefined);
 
@@ -118,7 +219,7 @@ export async function GET(request: Request) {
         conversationId: targetConvId || null,
         messages,
         context: {
-          lessonTitle: context.lessonTitle || 'General Tutor',
+          lessonTitle: context.lessonTitle || context.learningPathTitle || 'General Tutor',
           learningPathTitle: context.learningPathTitle,
           primaryWeakConcept: target.concept,
           primaryWeakConceptScore: target.masteryScore,
@@ -207,7 +308,43 @@ export async function POST(request: Request) {
     );
   }
 
-  const { lessonId, conversationId, message, mode } = body || {};
+  const { learningPathId: bodyPathId, lessonId, conversationId, message, mode } = body || {};
+  let learningPathId = bodyPathId || null;
+
+  const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+  if (learningPathId && !UUID_REGEX.test(learningPathId)) {
+    return NextResponse.json(
+      {
+        success: false,
+        error: 'Invalid course context ID format.',
+        code: 'INVALID_PARAMETER_FORMAT',
+      },
+      { status: 400 }
+    );
+  }
+
+  if (lessonId && !UUID_REGEX.test(lessonId)) {
+    return NextResponse.json(
+      {
+        success: false,
+        error: 'Invalid lesson context ID format.',
+        code: 'INVALID_PARAMETER_FORMAT',
+      },
+      { status: 400 }
+    );
+  }
+
+  if (conversationId && !UUID_REGEX.test(conversationId)) {
+    return NextResponse.json(
+      {
+        success: false,
+        error: 'Invalid conversation ID format.',
+        code: 'INVALID_PARAMETER_FORMAT',
+      },
+      { status: 400 }
+    );
+  }
 
   if (!message || typeof message !== 'string' || !message.trim()) {
     return NextResponse.json(
@@ -221,26 +358,70 @@ export async function POST(request: Request) {
   }
 
   try {
-    // 3. VERIFY LESSON OWNERSHIP IF LESSON ID IS SUPPLIED
-    if (lessonId) {
+    // Resolve learningPathId from lessonId if missing
+    if (lessonId && !learningPathId) {
       const { data: lessonRecord } = await adminClient
         .from('lessons')
-        .select('modules!inner(learning_paths!inner(user_id))')
+        .select('modules!inner(learning_path_id)')
+        .eq('id', lessonId)
+        .maybeSingle();
+      if (lessonRecord) {
+        learningPathId = (lessonRecord as any).modules?.learning_path_id || null;
+      }
+    }
+
+    // Fail closed if learningPathId is missing
+    if (!learningPathId) {
+      console.warn('[TUTOR POST] Missing learningPathId. Failing closed.');
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'Course context (learningPathId) is required.',
+          code: 'LEARNING_PATH_REQUIRED',
+        },
+        { status: 400 }
+      );
+    }
+
+    // Validate ownership: Verify lessonId belongs to learningPathId
+    if (lessonId && learningPathId) {
+      const { data: lessonRecord } = await adminClient
+        .from('lessons')
+        .select('modules!inner(learning_path_id)')
         .eq('id', lessonId)
         .maybeSingle();
 
-      const ownerId = (lessonRecord as any)?.modules?.learning_paths?.user_id;
-      if (ownerId && ownerId !== user.id) {
-        console.warn('[TUTOR] Unauthorized lesson ownership access attempt by user:', user.id);
+      const lessonPathId = (lessonRecord as any)?.modules?.learning_path_id;
+      if (!lessonPathId || lessonPathId !== learningPathId) {
+        console.warn('[TUTOR POST] Mismatched lesson and path identifiers!');
         return NextResponse.json(
           {
             success: false,
-            error: 'You are not authorized to access tutor session for this lesson.',
-            code: 'UNAUTHORIZED',
+            error: 'The specified lesson does not belong to the active course.',
+            code: 'INVALID_LESSON_COURSE_MATCH',
           },
-          { status: 403 }
+          { status: 400 }
         );
       }
+    }
+
+    // Validate ownership of learning path
+    const { data: pathRecord } = await adminClient
+      .from('learning_paths')
+      .select('id, user_id')
+      .eq('id', learningPathId)
+      .maybeSingle();
+
+    if (!pathRecord || pathRecord.user_id !== user.id) {
+      console.warn('[TUTOR POST] Unauthorized path context access');
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'You are not authorized to speak to the tutor in this course.',
+          code: 'UNAUTHORIZED',
+        },
+        { status: 403 }
+      );
     }
     console.log('[TUTOR] ownership verified');
 
@@ -251,7 +432,7 @@ export async function POST(request: Request) {
     if (convId) {
       const { data: existingConv } = await adminClient
         .from('ai_tutor_conversations')
-        .select('id, user_id, lesson_id')
+        .select('id, user_id, lesson_id, learning_path_id')
         .eq('id', convId)
         .maybeSingle();
 
@@ -265,33 +446,79 @@ export async function POST(request: Request) {
           { status: 403 }
         );
       }
+
+      if (existingConv.learning_path_id !== learningPathId) {
+        console.warn(`[TUTOR POST] Cross-course access attempt blocked: conversation.learning_path_id=${existingConv.learning_path_id}, requested.learningPathId=${learningPathId}`);
+        return NextResponse.json(
+          {
+            success: false,
+            error: 'The requested conversation does not belong to the active course.',
+            code: 'CROSS_COURSE_ACCESS_DENIED',
+          },
+          { status: 400 }
+        );
+      }
+
       if (existingConv.lesson_id && !validatedLessonId) {
         validatedLessonId = existingConv.lesson_id;
       }
     } else {
-      // Create new conversation row
-      const { data: newConv, error: convErr } = await adminClient
+      // Idempotent lookup: Check if there's already an active conversation for this user, course path, and lesson
+      let convQuery = adminClient
         .from('ai_tutor_conversations')
-        .insert({
-          user_id: user.id,
-          lesson_id: lessonId || null,
-          title: `Tutor Chat (${new Date().toLocaleDateString()})`,
-        })
-        .select()
-        .single();
+        .select('id, lesson_id')
+        .eq('user_id', user.id)
+        .eq('learning_path_id', learningPathId);
 
-      if (convErr || !newConv) {
-        console.error('[TUTOR] Error creating conversation:', convErr);
-        return NextResponse.json(
-          {
-            success: false,
-            error: 'Failed to initialize tutor conversation.',
-            code: 'DB_CONVERSATION_FAILED',
-          },
-          { status: 500 }
-        );
+      if (validatedLessonId) {
+        convQuery = convQuery.eq('lesson_id', validatedLessonId);
+      } else {
+        convQuery = convQuery.is('lesson_id', null);
       }
-      convId = newConv.id;
+
+      const { data: existingConv } = await convQuery
+        .order('updated_at', { ascending: false })
+        .maybeSingle();
+
+      if (existingConv) {
+        convId = existingConv.id;
+        console.log(`[TUTOR POST] Reusing existing conversation: convId=${convId}`);
+      } else {
+        // Create new conversation row
+        const { data: newConv, error: convErr } = await adminClient
+          .from('ai_tutor_conversations')
+          .insert({
+            user_id: user.id,
+            learning_path_id: learningPathId,
+            lesson_id: validatedLessonId,
+            title: `Tutor Chat (${new Date().toLocaleDateString()})`,
+          })
+          .select()
+          .single();
+
+        if (convErr || !newConv) {
+          console.error("[TUTOR][CONVERSATION_INIT_FAILED]", {
+            userId: user.id,
+            lessonId: validatedLessonId,
+            learningPathId,
+            conversationId: convId,
+            dbCode: convErr?.code,
+            dbMessage: convErr?.message,
+            dbDetails: convErr?.details,
+            dbHint: convErr?.hint
+          });
+          return NextResponse.json(
+            {
+              success: false,
+              error: 'Failed to initialize tutor conversation.',
+              code: 'DB_CONVERSATION_FAILED',
+            },
+            { status: 500 }
+          );
+        }
+        convId = newConv.id;
+        console.log(`[TUTOR POST] Created new conversation: convId=${convId}`);
+      }
     }
 
     // 5. LOAD RECENT CONVERSATION MESSAGES (BOUNDED TO LAST 10 MESSAGES)
@@ -305,7 +532,7 @@ export async function POST(request: Request) {
     const orderedHistory = (pastMessages || []).reverse();
 
     // 6. BUILD TUTOR CONTEXT, SELECT TEACHING PLAN, & CONSTRUCT SYSTEM PROMPT
-    const context = await buildTutorContext({ userId: user.id, lessonId: validatedLessonId });
+    const context = await buildTutorContext({ userId: user.id, learningPathId, lessonId: validatedLessonId });
     const target = resolvePrimaryTargetConcept(context);
     const plan = selectTeachingStrategy(context, message, mode);
 
@@ -389,7 +616,7 @@ export async function POST(request: Request) {
           content: assistantResponseText,
         },
         context: {
-          lessonTitle: context.lessonTitle || 'General Tutor',
+          lessonTitle: context.lessonTitle || context.learningPathTitle || 'General Tutor',
           primaryWeakConcept: target.concept,
           primaryWeakConceptScore: target.masteryScore,
           primaryTargetConcept: target.concept,

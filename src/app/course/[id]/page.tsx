@@ -23,6 +23,8 @@ const TABS: { type: TabType; label: string; icon: React.ComponentType<{ classNam
 ];
 
 export default function CourseWorkspace() {
+  const params = useParams();
+  const courseId = params?.id as string;
   const course = mockOSCourseDetail;
 
   const [activeTab,    setActiveTab]    = useState<TabType>('roadmap');
@@ -123,7 +125,7 @@ export default function CourseWorkspace() {
         {activeTab === 'notes'     && <NotesTab     notes={course.notes} activeNodeId={activeNodeId} nodeList={allNodes} onSelectNode={setActiveNodeId} onAskTutorAboutNote={t => { setTutorCtx(t); setActiveTab('tutor'); }} />}
         {activeTab === 'resources' && <ResourcesTab activeNodeId={activeNodeId} nodeList={allNodes} onSelectNode={setActiveNodeId} />}
         {activeTab === 'quiz'      && <QuizTab      activeNodeId={activeNodeId} nodeList={allNodes} onSelectNode={setActiveNodeId} onCompleteQuiz={(pct, xp) => { if (pct >= 60) setProgress(p => Math.min(100, p + 15)); }} onSwitchTab={switchTab} />}
-        {activeTab === 'tutor'     && <TutorTab     initialContext={tutorCtx} />}
+        {activeTab === 'tutor'     && <TutorTab     learningPathId={courseId} initialContext={tutorCtx} />}
       </div>
     </div>
   );

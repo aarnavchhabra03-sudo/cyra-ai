@@ -192,6 +192,7 @@ export async function completeLearningIntervention({
   sourceQuizAttemptId,
   userId,
   concept,
+  learningPathId,
   masteryAfter,
   score,
 }: {
@@ -200,6 +201,7 @@ export async function completeLearningIntervention({
   sourceQuizAttemptId?: string | null;
   userId: string;
   concept: string;
+  learningPathId?: string | null;
   masteryAfter: number;
   score?: number | null;
 }): Promise<boolean> {
@@ -212,12 +214,17 @@ export async function completeLearningIntervention({
 
     // 1. Primary Lookup: Deterministic source_practice_session_id match
     if (sourcePracticeSessionId) {
-      const { data: recBySession } = await adminClient
+      let query = adminClient
         .from('learning_interventions')
         .select('id, mastery_before, concept')
         .eq('user_id', userId)
-        .eq('source_practice_session_id', sourcePracticeSessionId)
-        .maybeSingle();
+        .eq('source_practice_session_id', sourcePracticeSessionId);
+
+      if (learningPathId) {
+        query = query.eq('learning_path_id', learningPathId);
+      }
+
+      const { data: recBySession } = await query.maybeSingle();
 
       if (recBySession) {
         targetRecord = recBySession;
@@ -227,12 +234,17 @@ export async function completeLearningIntervention({
 
     // 2. Secondary Lookup: Deterministic source_quiz_attempt_id match
     if (!targetRecord && sourceQuizAttemptId) {
-      const { data: recByQuiz } = await adminClient
+      let query = adminClient
         .from('learning_interventions')
         .select('id, mastery_before, concept')
         .eq('user_id', userId)
-        .eq('source_quiz_attempt_id', sourceQuizAttemptId)
-        .maybeSingle();
+        .eq('source_quiz_attempt_id', sourceQuizAttemptId);
+
+      if (learningPathId) {
+        query = query.eq('learning_path_id', learningPathId);
+      }
+
+      const { data: recByQuiz } = await query.maybeSingle();
 
       if (recByQuiz) {
         targetRecord = recByQuiz;
@@ -242,12 +254,17 @@ export async function completeLearningIntervention({
 
     // 3. Tertiary Lookup: Direct interventionId match
     if (!targetRecord && interventionId) {
-      const { data: recById } = await adminClient
+      let query = adminClient
         .from('learning_interventions')
         .select('id, mastery_before, concept')
         .eq('id', interventionId)
-        .eq('user_id', userId)
-        .maybeSingle();
+        .eq('user_id', userId);
+
+      if (learningPathId) {
+        query = query.eq('learning_path_id', learningPathId);
+      }
+
+      const { data: recById } = await query.maybeSingle();
 
       if (recById) {
         targetRecord = recById;
@@ -257,13 +274,18 @@ export async function completeLearningIntervention({
     // 4. Fallback: Safe temporal concept matching within 60 minutes
     if (!targetRecord) {
       const cutoff = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-      const { data: openInterventions } = await adminClient
+      let query = adminClient
         .from('learning_interventions')
         .select('id, mastery_before, concept')
         .eq('user_id', userId)
         .is('completed_at', null)
-        .gte('started_at', cutoff)
-        .order('started_at', { ascending: false });
+        .gte('started_at', cutoff);
+
+      if (learningPathId) {
+        query = query.eq('learning_path_id', learningPathId);
+      }
+
+      const { data: openInterventions } = await query.order('started_at', { ascending: false });
 
       const normC = normalizeGraphConcept(concept);
       const matching = (openInterventions || []).find(
@@ -324,6 +346,7 @@ export async function correlateAssessmentEvidence({
   userId,
   concept,
   lessonId,
+  learningPathId,
   newMasteryScore,
   score,
   sourcePracticeSessionId,
@@ -332,6 +355,7 @@ export async function correlateAssessmentEvidence({
   userId: string;
   concept: string;
   lessonId?: string | null;
+  learningPathId?: string | null;
   newMasteryScore: number;
   score?: number | null;
   sourcePracticeSessionId?: string | null;
@@ -343,6 +367,7 @@ export async function correlateAssessmentEvidence({
     await completeLearningIntervention({
       userId,
       concept,
+      learningPathId,
       masteryAfter: newMasteryScore,
       score,
       sourcePracticeSessionId,
@@ -358,7 +383,8 @@ export async function correlateAssessmentEvidence({
  */
 export async function getInterventionEffectiveness(
   userId: string,
-  concept?: string | null
+  concept?: string | null,
+  learningPathId?: string | null
 ): Promise<InterventionEffectivenessReport> {
   const defaultReport: InterventionEffectivenessReport = {
     totalCompletedInterventions: 0,
@@ -371,12 +397,17 @@ export async function getInterventionEffectiveness(
   if (!userId) return defaultReport;
 
   try {
-    const { data: rows, error } = await adminClient
+    let query = adminClient
       .from('learning_interventions')
       .select('*')
       .eq('user_id', userId)
-      .not('completed_at', 'is', null)
-      .order('completed_at', { ascending: false });
+      .not('completed_at', 'is', null);
+
+    if (learningPathId) {
+      query = query.eq('learning_path_id', learningPathId);
+    }
+
+    const { data: rows, error } = await query.order('completed_at', { ascending: false });
 
     if (error || !rows || rows.length === 0) {
       return defaultReport;
@@ -398,11 +429,11 @@ export async function getInterventionEffectiveness(
 
       totalGain += delta;
 
-      const curr = strategyGroup.get(strat) || { count: 0, gainSum: 0, scoreSum: 0 };
-      curr.count += 1;
-      curr.gainSum += delta;
-      curr.scoreSum += score;
-      strategyGroup.set(strat, curr);
+      const group = strategyGroup.get(strat) || { count: 0, gainSum: 0, scoreSum: 0 };
+      group.count++;
+      group.gainSum += delta;
+      group.scoreSum += score;
+      strategyGroup.set(strat, group);
     }
 
     const strategyBreakdown: StrategyEffectivenessSummary[] = [];
@@ -451,7 +482,7 @@ export async function getInterventionEffectiveness(
       recentOutcomes,
     };
   } catch (err) {
-    console.error('[INTERVENTION] Error fetching effectiveness:', err);
+    console.warn('[INTERVENTION EFFECTIVENESS] Error generating report:', err);
     return defaultReport;
   }
 }
@@ -461,18 +492,25 @@ export async function getInterventionEffectiveness(
  */
 export async function detectInterventionStagnation(
   userId: string,
-  concept: string
+  concept: string,
+  learningPathId?: string | null
 ): Promise<{ stagnant: boolean; recentAttempts: number; averageGain: number }> {
   if (!userId || !concept) return { stagnant: false, recentAttempts: 0, averageGain: 0 };
 
   try {
     const normC = normalizeGraphConcept(concept);
 
-    const { data: rows } = await adminClient
+    let query = adminClient
       .from('learning_interventions')
       .select('*')
       .eq('user_id', userId)
-      .not('completed_at', 'is', null)
+      .not('completed_at', 'is', null);
+
+    if (learningPathId) {
+      query = query.eq('learning_path_id', learningPathId);
+    }
+
+    const { data: rows } = await query
       .order('completed_at', { ascending: false })
       .limit(10);
 

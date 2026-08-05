@@ -6,6 +6,8 @@ import {
   calculateConceptReadiness,
   detectRootKnowledgeGaps,
   normalizeGraphConcept,
+  getLearningPathConcepts,
+  getLearningPathLessons,
 } from '@/lib/adaptive/knowledge-graph';
 import { generateAdaptiveLearningPlan } from '@/lib/adaptive/learning-plan';
 import { buildLearnerStateSnapshot, determineNextBestAction } from '@/lib/adaptive/orchestrator';
@@ -132,7 +134,7 @@ export function resolvePrimaryTargetConcept(context: TutorContext): PrimaryTarge
   }
 
   // Fallback if no concept mastery rows exist yet in user_concept_mastery
-  const fallbackConcept = context.keyConcepts?.[0] || context.lessonTitle || 'General Lesson Topic';
+  const fallbackConcept = context.keyConcepts?.[0] || context.lessonTitle || context.learningPathTitle || 'General Lesson Topic';
   return { concept: fallbackConcept, masteryScore: 0, level: 'lesson_concept' };
 }
 
@@ -142,9 +144,11 @@ export function resolvePrimaryTargetConcept(context: TutorContext): PrimaryTarge
  */
 export async function buildTutorContext({
   userId,
+  learningPathId,
   lessonId,
 }: {
   userId: string;
+  learningPathId?: string | null;
   lessonId?: string | null;
 }): Promise<TutorContext> {
   const context: TutorContext = {
@@ -162,14 +166,73 @@ export async function buildTutorContext({
   };
 
   try {
+    // Resolve learningPathId from lessonId if not supplied
+    let resolvedPathId = learningPathId || null;
+    if (lessonId && !resolvedPathId) {
+      const { data: lessonRec } = await adminClient
+        .from('lessons')
+        .select('modules!inner(learning_path_id)')
+        .eq('id', lessonId)
+        .maybeSingle();
+      if (lessonRec) {
+        resolvedPathId = (lessonRec as any).modules?.learning_path_id || null;
+      }
+    }
+
+    if (!resolvedPathId) {
+      throw new Error('Tutor context requires a resolved learningPathId');
+    }
+
+    // Fetch learning path title
+    const { data: pathRec } = await adminClient
+      .from('learning_paths')
+      .select('title')
+      .eq('id', resolvedPathId)
+      .maybeSingle();
+    if (pathRec) {
+      context.learningPathTitle = pathRec.title;
+    }
+
+    // If lessonId is not provided, dynamically resolve the first lesson in this learning path
+    let resolvedLessonId = lessonId || null;
+    if (!resolvedLessonId) {
+      const { data: firstLesson } = await adminClient
+        .from('lessons')
+        .select(`
+          id,
+          title,
+          lesson_order,
+          modules!inner(
+            learning_path_id
+          )
+        `)
+        .eq('modules.learning_path_id', resolvedPathId)
+        .order('lesson_order', { ascending: true })
+        .limit(1)
+        .maybeSingle();
+
+      if (firstLesson) {
+        resolvedLessonId = firstLesson.id;
+        console.log(`[buildTutorContext] Resolved first lesson for course context: "${firstLesson.title}" (${firstLesson.id})`);
+      }
+    }
+
+    if (resolvedLessonId) {
+      context.lessonId = resolvedLessonId;
+    }
+
+    const lpLessons = await getLearningPathLessons(resolvedPathId);
+
     const masteryMap = new Map<string, number>();
 
     // 1. FETCH USER CONCEPT MASTERY
-    const { data: masteryRows } = await adminClient
+    const masteryQuery = adminClient
       .from('user_concept_mastery')
       .select('*')
       .eq('user_id', userId)
-      .order('mastery_score', { ascending: true });
+      .eq('learning_path_id', resolvedPathId);
+
+    const { data: masteryRows } = await masteryQuery.order('mastery_score', { ascending: true });
 
     if (masteryRows && masteryRows.length > 0) {
       const records: ConceptMasteryRecordInput[] = masteryRows.map((r) => {
@@ -214,7 +277,7 @@ export async function buildTutorContext({
     }
 
     // 2. FETCH LESSON CONTEXT IF LESSON ID IS PROVIDED
-    if (lessonId) {
+    if (resolvedLessonId) {
       const { data: lessonRecord } = await adminClient
         .from('lessons')
         .select(`
@@ -238,7 +301,7 @@ export async function buildTutorContext({
             key_concepts
           )
         `)
-        .eq('id', lessonId)
+        .eq('id', resolvedLessonId)
         .maybeSingle();
 
       if (lessonRecord) {
@@ -265,10 +328,20 @@ export async function buildTutorContext({
 
     // 3. FETCH RECENT QUIZ MISTAKES (BOUNDED TO LAST 5 INCORRECT ANSWERS)
     try {
-      const { data: recentAttempts } = await adminClient
+      let recentAttemptsQuery = adminClient
         .from('quiz_attempts')
         .select('id')
-        .eq('user_id', userId)
+        .eq('user_id', userId);
+
+      if (resolvedPathId && lpLessons) {
+        if (lpLessons.length > 0) {
+          recentAttemptsQuery = recentAttemptsQuery.in('lesson_id', lpLessons);
+        } else {
+          recentAttemptsQuery = recentAttemptsQuery.eq('lesson_id', '00000000-0000-0000-0000-000000000000');
+        }
+      }
+
+      const { data: recentAttempts } = await recentAttemptsQuery
         .order('completed_at', { ascending: false })
         .limit(3);
 
@@ -304,7 +377,7 @@ export async function buildTutorContext({
 
     // 4. FETCH RECENT TARGETED PRACTICE HISTORY (BOUNDED TO 3)
     try {
-      const { data: practiceAttempts } = await adminClient
+      let practiceAttemptsQuery = adminClient
         .from('adaptive_practice_attempts')
         .select(`
           percentage,
@@ -312,10 +385,21 @@ export async function buildTutorContext({
           mastery_after,
           completed_at,
           adaptive_practice_sessions!inner (
-            concept
+            concept,
+            lesson_id
           )
         `)
-        .eq('user_id', userId)
+        .eq('user_id', userId);
+
+      if (resolvedPathId && lpLessons) {
+        if (lpLessons.length > 0) {
+          practiceAttemptsQuery = practiceAttemptsQuery.in('adaptive_practice_sessions.lesson_id', lpLessons);
+        } else {
+          practiceAttemptsQuery = practiceAttemptsQuery.eq('adaptive_practice_sessions.lesson_id', '00000000-0000-0000-0000-000000000000');
+        }
+      }
+
+      const { data: practiceAttempts } = await practiceAttemptsQuery
         .order('completed_at', { ascending: false })
         .limit(3);
 
@@ -352,6 +436,7 @@ export async function buildTutorContext({
         targetConcept: target.concept,
         conceptList: allConcepts,
         lessonId,
+        learningPathId: resolvedPathId,
       });
     } catch (memErr) {
       console.warn('[TUTOR CONTEXT] Error fetching tutor memories:', memErr);
@@ -360,7 +445,7 @@ export async function buildTutorContext({
     // 7. BUILD KNOWLEDGE GRAPH INTELLIGENCE
     try {
       const target = resolvePrimaryTargetConcept(context);
-      const relationships = await getUserConceptRelationships(userId);
+      const relationships = await getUserConceptRelationships(userId, resolvedPathId);
 
       const readiness = calculateConceptReadiness({
         targetConcept: target.concept,
@@ -389,7 +474,7 @@ export async function buildTutorContext({
 
     // 8. BUILD ADAPTIVE LEARNING PLAN SUMMARY
     try {
-      const plan = await generateAdaptiveLearningPlan({ userId });
+      const plan = await generateAdaptiveLearningPlan({ userId, learningPathId });
       if (plan.nextTargets.length > 0) {
         const topTarget = plan.nextTargets[0];
         const topRootGap = plan.rootGaps[0];
@@ -414,7 +499,7 @@ export async function buildTutorContext({
 
     // 9. BUILD ORCHESTRATED NEXT BEST ACTION SUMMARY
     try {
-      const snapshot = await buildLearnerStateSnapshot({ userId, currentLessonId: lessonId });
+      const snapshot = await buildLearnerStateSnapshot({ userId, currentLessonId: lessonId, learningPathId });
       const nba = determineNextBestAction(snapshot);
       context.nextBestAction = {
         action: nba.action,
@@ -429,7 +514,7 @@ export async function buildTutorContext({
 
     // 10. BUILD CLOSED-LOOP INTERVENTION INTELLIGENCE SUMMARY
     try {
-      const effReport = await getInterventionEffectiveness(userId);
+      const effReport = await getInterventionEffectiveness(userId, null, learningPathId);
       context.interventionIntelligence = {
         totalCompletedInterventions: effReport.totalCompletedInterventions,
         averageMasteryGain: effReport.averageMasteryGain,
